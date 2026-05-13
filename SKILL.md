@@ -45,7 +45,7 @@ All scripts are ESM; run them with Node 18+. They print structured JSON or extra
 
 ## Setup
 
-The skill ships with `node_modules/@rhwp/core` already vendored — the parser, renderer, and edit API run in WASM via that package. No `npm install` needed.
+The skill ships with the rhwp WASM bundle vendored under `vendor/rhwp/` — the parser, renderer, and edit API run in WASM via that bundle. No `npm install` needed at runtime. (Local dev keeps the same files in `node_modules/@rhwp/core/` so editor tooling/intellisense works; the runtime ignores it.)
 
 The `rhwp` CLI binary improves two paths but is not strictly required:
 1. `scripts/render.mjs` — PNG rendering via native skia. **Required** for PNG output (the WASM build doesn't have a raster path).
@@ -119,7 +119,7 @@ See the "Read this before editing" callout above for the full picture. Short ver
 
 ### Structural edits beyond find/replace
 
-For inserting text at a specific location, deleting, creating tables, or working with cells, headers, footers, footnotes, the edit methods are exposed on `HwpDocument` directly (see `node_modules/@rhwp/core/rhwp.d.ts` — search for `insertText`, `deleteText`, `createTable`, `insertTextInCell`, `insertTextInHeaderFooter`, `insertTextInFootnote`). v0 of this skill only ships a one-shot `create.mjs` for these. For a one-off edit beyond find/replace, write a short ad-hoc script that imports `loadDocument` from `scripts/_bootstrap.mjs` and calls the methods you need:
+For inserting text at a specific location, deleting, creating tables, or working with cells, headers, footers, footnotes, the edit methods are exposed on `HwpDocument` directly (see `vendor/rhwp/rhwp.d.ts` — search for `insertText`, `deleteText`, `createTable`, `insertTextInCell`, `insertTextInHeaderFooter`, `insertTextInFootnote`). v0 of this skill only ships a one-shot `create.mjs` for these. For a one-off edit beyond find/replace, write a short ad-hoc script that imports `loadDocument` from `scripts/_bootstrap.mjs` and calls the methods you need:
 
 ```js
 import { loadDocument } from "./scripts/_bootstrap.mjs";
@@ -223,7 +223,7 @@ Then read the PNG back and confirm the layout is what was expected. **Do not dec
 ## Dependencies
 
 - **Node.js ≥ 18** with native ESM support
-- **`@rhwp/core` ≥ 0.7.10** (vendored under `node_modules/@rhwp/core/`)
+- **rhwp WASM bundle ≥ 0.7.10** (vendored under `vendor/rhwp/` — `rhwp.js` + `rhwp_bg.wasm`)
 - **`rhwp` CLI ≥ 0.7.10** for `render.mjs`, and for `read.mjs --format text|markdown` (resolution: `$RHWP_BIN` → `vendor/bin/` → `PATH`)
 
 The skill depends on no other system tools — no LibreOffice, no pandoc, no poppler. The rhwp engine handles HWP↔HWPX, text/markdown extraction, SVG, and PNG natively.

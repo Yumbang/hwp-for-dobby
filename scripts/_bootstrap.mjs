@@ -29,10 +29,17 @@ import {
 import { fileURLToPath } from "node:url";
 import { basename, dirname, join } from "node:path";
 import { randomBytes } from "node:crypto";
-import init, { HwpDocument, version } from "@rhwp/core";
+// The rhwp WASM bundle is vendored under ../vendor/rhwp/ rather than
+// imported via the `@rhwp/core` npm name. Reason: Anthropic's Claude.ai
+// skill ZIP validator rejects paths containing `@`, so a path like
+// `node_modules/@rhwp/core/` triggers "Zip file contains path with
+// invalid characters". Vendoring sidesteps that and removes the
+// `npm install` requirement at runtime — the WASM bundle ships in the
+// skill itself.
+import init, { HwpDocument, version } from "../vendor/rhwp/rhwp.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const WASM_PATH = join(HERE, "..", "node_modules", "@rhwp", "core", "rhwp_bg.wasm");
+const WASM_PATH = join(HERE, "..", "vendor", "rhwp", "rhwp_bg.wasm");
 
 // Cheap, deterministic approximation: pull pixel size out of a CSS font
 // string (e.g. "12pt 함초롬바탕") and assume an average advance of 0.55em.
