@@ -1,0 +1,13 @@
+{
+  "name": "hwp-skill",
+  "version": "0.1.0",
+  "description": "AI-agent skill for viewing and editing HWP/HWPX (Korean Hangul) documents via the rhwp engine",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@rhwp/core": "^0.7.10"
+  }
+}
