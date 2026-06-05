@@ -12,19 +12,20 @@ This skill lets you view, edit, fill, and create HWP and HWPX documents — the 
 
 Read first, edit second, verify visually third. The visual verification step matters more for HWP than for docx because Korean typography, page layout, and tab stops have rhwp engine corner cases that don't always show up in text extraction.
 
-## ⚠️ Read this before editing
+## ⚠️ Output policy: always `.hwp`, never `.hwpx`
 
-The rhwp engine has two known round-trip bugs that affect any task that **edits an existing document and saves it**:
+**This skill's output format is always HWP 5.0 (`.hwp`).** The write scripts (`replace.mjs`, `fill_form.mjs`, `create.mjs`) refuse `--output *.hwpx` with exit 2. Reasons, both upstream engine facts:
 
-1. **HWP 5.0 (`.hwp`) save loses some edits silently.** `replaceAll` can report 28 successful in-memory replacements but the on-disk file shows zero. `replace.mjs` auto-detects this and reports `verified: false`.
-2. **HWPX (`.hwpx`) save preserves rhwp's own edits but Hancom Office (한글 program) currently rejects rhwp-produced HWPX files as "suspiciously manipulated" and refuses to open them.** Verified on real samples in 2026-05.
+1. **Native HWPX save is broken**: Hancom Office (한글 program) rejects rhwp-produced `.hwpx` files as "suspiciously manipulated" and refuses to open them. Verified on real samples in 2026-05; still unfixed as of rhwp v0.7.13.
+2. **`.hwp` output is the engine's supported lane.** `exportHwp()` runs an HWPX→HWP adapter for HWPX-sourced docs, so **`.hwpx` INPUT is fully fine** — open an `.hwpx`, edit it, save it as `.hwp`. (Production evidence: hop, the rhwp-based desktop word processor, ships exactly this policy — HWP save enabled, HWPX save blocked.)
 
-**What this means for you:** if the user needs the edited file to round-trip through Hancom Office, **there is no fully working path right now**. Tell the user this honestly when an edit task starts. Acceptable workflows:
+What this means per task type:
 
-- **Read-only / extraction / vision tasks**: fully reliable. Use freely.
-- **Form filling**: partial reliability — the engine round-trips form fields correctly into both `.hwp` and `.hwpx`, but Hancom Office still won't open the resulting `.hwpx`. If the user wants a Hancom-readable filled form, save as `.hwp` and accept that filled values may inherit placeholder styling (red/bold/italic) and that some edits in tables/textboxes may not persist.
-- **Find/replace / structural edits on body text**: save as `.hwpx`, tell the user it will be rhwp-readable but not Hancom-readable. If they need Hancom-readable, the engine cannot honor that today.
+- **Read-only / extraction / vision tasks**: fully reliable, both formats. Use freely.
+- **Find/replace / structural edits**: save as `.hwp`. One residual engine bug remains — **HWP save can silently drop some edits** (`replaceAll` reports count=28 in-memory, the on-disk file shows zero). `replace.mjs` auto-detects this on reload and reports `verified: false`; treat that as a failed task. There is no `.hwpx` fallback.
+- **Form filling**: save as `.hwp`. Filled values may inherit placeholder styling (red/bold/italic), and on pre-populated fields the current engine build can corrupt metadata (upstream #838, fixed on rhwp devel, not yet in our build) — visually verify the output.
 - **Create-from-scratch**: reliable. A doc built fresh via `create.mjs` saves cleanly to `.hwp` and Hancom Office reads it.
+- **Task requires `.hwpx` as the deliverable**: the engine cannot produce a Hancom-readable `.hwpx` today. Say so honestly instead of shipping a file Hancom will reject.
 
 This is a fork of the rhwp engine; the bugs are upstream. Do not promise round-trip preservation that the engine can't deliver.
 
@@ -99,23 +100,16 @@ node scripts/replace.mjs in.hwp --query "old" --replacement "new" --all --output
 node scripts/replace.mjs in.hwp --query "Term" --replacement "Item" --case-sensitive --output out.hwp
 ```
 
-Output extension picks the format: `.hwpx` writes HWPX, anything else writes HWP 5.0. **The script exits non-zero with no match** so you can detect failed replacements; do not assume success.
+Output is always HWP 5.0 — `--output *.hwpx` is refused (exit 2; see the output-policy callout above). **The script exits non-zero with no match** so you can detect failed replacements; do not assume success.
 
-### Output format and round-tripping
-
-See the "Read this before editing" callout above for the full picture. Short version:
-
-- `.hwp` save: rhwp re-reads it, but some edits silently disappear.
-- `.hwpx` save: edits persist within rhwp, but Hancom Office rejects the file.
+### Round-trip verification
 
 `replace.mjs` automatically verifies after save by reloading the output and searching for the original query. If it's still present, the script:
 - sets `verified: false` in the JSON summary
-- prints a warning on stderr suggesting an `.hwpx` output
+- prints a warning on stderr telling you to treat the task as failed
 - with `--strict`, exits non-zero (exit code 4)
 
-**Tell the user which trade-off you're making before you save.** Don't silently choose for them. If the user only needs the file to flow through other rhwp-based tools (this skill, browser extensions, etc.), `.hwpx` is fine. If they need to open it in Hancom Office, you must warn them that today's rhwp engine cannot produce a Hancom-readable edited file.
-
-(HWPX→HWP IR conversion is also disabled in the engine to prevent layout damage — rhwp issue #197 — which is a separate constraint from the round-trip problem above.)
+`verified: false` means the engine accepted the edit in-memory but dropped it on save (upstream HWP serializer bug). **Report it to the user as a failed edit** — there is no alternate output format to fall back to.
 
 ### Structural edits beyond find/replace
 
@@ -143,8 +137,8 @@ node scripts/fill_form.mjs form.hwpx --list > fields.json
 # 2. write a values.json with the fields you want to fill
 #    (object keyed by field name)
 
-# 3. apply
-node scripts/fill_form.mjs form.hwpx --values values.json --output filled.hwpx
+# 3. apply (output must be .hwp — .hwpx input is fine)
+node scripts/fill_form.mjs form.hwpx --values values.json --output filled.hwp
 ```
 
 `values.json` example:
@@ -192,21 +186,21 @@ Steps run in order against a freshly-created empty document. The plan format is 
 After any non-trivial edit or generation, render at least one page to PNG and look at it. Korean fonts, tab stops, and page layout have engine corner cases that text extraction won't catch.
 
 ```bash
-node scripts/render.mjs filled.hwpx --page 0 --output page0.png
+node scripts/render.mjs filled.hwp --page 0 --output page0.png
 ```
 
 The default `--vlm-target claude` sizes the PNG for Claude Vision (~1568px longest edge, ~1.15 MP). For higher fidelity:
 
 ```bash
-node scripts/render.mjs filled.hwpx --page 0 --output page0.png --scale 2.0
-node scripts/render.mjs filled.hwpx --page 0 --output page0.png --max-dimension 2400
+node scripts/render.mjs filled.hwp --page 0 --output page0.png --scale 2.0
+node scripts/render.mjs filled.hwp --page 0 --output page0.png --max-dimension 2400
 ```
 
 Then read the PNG back and confirm the layout is what was expected. **Do not declare an edit task complete without visually verifying at least the page that was changed.** This is the single biggest reliability win for HWP work; treat it as part of the task, not as optional polish.
 
 ## Common pitfalls
 
-- **Wrong output extension.** `--output out.hwpx` calls `exportHwpx`, anything else calls `exportHwp`. If the user gave you `.hwp`, save back to `.hwp` (see HWPX→HWP caveat above).
+- **Trying to write `.hwpx`.** All write scripts refuse `--output *.hwpx` (exit 2) — native HWPX save produces files Hancom Office rejects. Always emit `.hwp`, even when the input was `.hwpx`. If the user explicitly asks for an `.hwpx` deliverable, explain the engine limitation instead of working around the guard with an ad-hoc `exportHwpx()` call.
 - **Not visually verifying.** Text extraction can pass while the actual page is broken (missing characters, overflowing tables, font fallback issues). Render PNG and look.
 - **Assuming replace succeeded.** `replace.mjs` exits non-zero on no-match. Check exit codes; do not chain blindly.
 - **Trusting exit 0 alone on HWP output.** Because of the HWP edit-loss bug, `replace.mjs` can exit 0 with `count: N` while the saved `.hwp` actually contains zero of the new strings. **Always read the `verified` field from `replace.mjs`'s JSON output before telling the user the edit succeeded.** `verified: false` means the engine accepted the edit in-memory but the saved file does not show it on reload — treat that as a failed task, not a successful one. Use `--strict` if you want non-zero exit on `verified: false` (exit code 4).

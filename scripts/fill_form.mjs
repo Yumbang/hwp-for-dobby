@@ -10,10 +10,13 @@
 //   - --values → reads a JSON object {fieldName: value, ...} and applies
 //                each via setFieldValueByName, then saves.
 //
+// Output is always HWP 5.0 binary — `.hwpx` output is refused (see
+// assertHwpOutput in _bootstrap.mjs). `.hwpx` INPUT is fine.
+//
 // Field names that don't exist cause a non-zero exit and are reported in
 // the error JSON, so partial fills never silently succeed.
 
-import { atomicWriteFile, loadDocument } from "./_bootstrap.mjs";
+import { assertHwpOutput, atomicWriteFile, loadDocument } from "./_bootstrap.mjs";
 import { readFileSync } from "node:fs";
 
 function arg(name) {
@@ -42,9 +45,10 @@ if (flag("--list")) {
 const valuesPath = arg("--values");
 const output = arg("--output");
 if (!valuesPath || !output) {
-  console.error("missing --values <json> or --output <path>");
+  console.error("missing --values <json> or --output <out.hwp>");
   process.exit(2);
 }
+assertHwpOutput(output);
 
 const values = JSON.parse(readFileSync(valuesPath, "utf8"));
 const applied = [];
@@ -63,6 +67,6 @@ if (failed.length) {
   process.exit(3);
 }
 
-const bytes = output.toLowerCase().endsWith(".hwpx") ? doc.exportHwpx() : doc.exportHwp();
+const bytes = doc.exportHwp();
 atomicWriteFile(output, Buffer.from(bytes));
 process.stdout.write(JSON.stringify({ input, output, applied }, null, 2) + "\n");

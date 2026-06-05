@@ -120,4 +120,22 @@ export function atomicWriteFile(path, data) {
   }
 }
 
+// Output-format policy: the skill always emits .hwp, never .hwpx.
+// Native HWPX save is unsupported — Hancom Office rejects rhwp-produced
+// .hwpx files as manipulated ("파일 손상"); upstream, unfixed as of v0.7.13.
+// .hwpx INPUT is fine: exportHwp() runs the engine's HWPX→HWP adapter for
+// HWPX-sourced docs. Every script calls this on its --output argument
+// before doing any work, so a bad extension fails fast instead of after
+// an expensive edit pass.
+export function assertHwpOutput(path) {
+  if (String(path).toLowerCase().endsWith(".hwpx")) {
+    process.stderr.write(
+      `error: .hwpx output is not supported — Hancom Office rejects rhwp-produced HWPX files ("파일 손상").\n` +
+        `       Save as .hwp instead: --output ${String(path).replace(/\.hwpx$/i, ".hwp")}\n` +
+        `       (.hwpx INPUT is fine — exportHwp converts it to .hwp via the engine's adapter.)\n`,
+    );
+    process.exit(2);
+  }
+}
+
 export { HwpDocument, version };

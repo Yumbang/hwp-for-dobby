@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Usage:
-//   node scripts/create.mjs --plan <plan.json> --output <out.hwp|.hwpx>
+//   node scripts/create.mjs --plan <plan.json> --output <out.hwp>
 //
 // Builds an HWP from scratch by replaying a JSON plan against a fresh
 // blank document. Each step in plan.steps is one of:
@@ -38,9 +38,10 @@
 // keeps the plan format simple so an agent can produce one in a single
 // pass — no need to maintain editor state across calls.
 //
-// Saves with exportHwpx if --output ends in .hwpx, otherwise exportHwp.
+// Output is always HWP 5.0 binary — `.hwpx` output is refused (see
+// assertHwpOutput in _bootstrap.mjs).
 
-import { atomicWriteFile, emptyDocument } from "./_bootstrap.mjs";
+import { assertHwpOutput, atomicWriteFile, emptyDocument } from "./_bootstrap.mjs";
 import { readFileSync } from "node:fs";
 
 function arg(name) {
@@ -51,9 +52,10 @@ function arg(name) {
 const planPath = arg("--plan");
 const output = arg("--output");
 if (!planPath || !output) {
-  console.error("usage: create.mjs --plan <plan.json> --output <out.hwp|.hwpx>");
+  console.error("usage: create.mjs --plan <plan.json> --output <out.hwp>");
   process.exit(2);
 }
+assertHwpOutput(output);
 
 const plan = JSON.parse(readFileSync(planPath, "utf8"));
 const doc = await emptyDocument();
@@ -97,6 +99,6 @@ for (const [i, step] of (plan.steps ?? []).entries()) {
   }
 }
 
-const bytes = output.toLowerCase().endsWith(".hwpx") ? doc.exportHwpx() : doc.exportHwp();
+const bytes = doc.exportHwp();
 atomicWriteFile(output, Buffer.from(bytes));
 process.stdout.write(JSON.stringify({ output, applied }, null, 2) + "\n");
