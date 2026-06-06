@@ -120,6 +120,35 @@ export function atomicWriteFile(path, data) {
   }
 }
 
+// Fast "does this document contain at least one table?" probe. Used by
+// read.mjs to warn loudly before flattened (WASM-fallback) text extraction:
+// flattening a table with merged cells silently misplaces cell text, so the
+// agent should be steered to extract_tables.mjs. Sub-millisecond even on
+// 40-page documents — getControlTextPositions is cheap and returns "[]"
+// rather than throwing on out-of-range indices; getTableDimensions throws
+// on non-table controls, which is how non-tables are skipped.
+export function documentHasTable(doc) {
+  for (let s = 0; s < doc.getSectionCount(); s++) {
+    for (let p = 0; p < doc.getParagraphCount(s); p++) {
+      let n = 0;
+      try {
+        n = JSON.parse(doc.getControlTextPositions(s, p)).length;
+      } catch {
+        n = 0;
+      }
+      for (let c = 0; c < n; c++) {
+        try {
+          doc.getTableDimensions(s, p, c);
+          return true;
+        } catch {
+          /* not a table */
+        }
+      }
+    }
+  }
+  return false;
+}
+
 // Output-format policy: the skill always emits .hwp, never .hwpx.
 // Native HWPX save is unsupported — Hancom Office rejects rhwp-produced
 // .hwpx files as manipulated ("파일 손상"); upstream, unfixed as of v0.7.13.

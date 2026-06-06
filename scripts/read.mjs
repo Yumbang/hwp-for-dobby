@@ -10,9 +10,12 @@
 //      `rhwp` binary on $PATH or via $RHWP_BIN. Use this when you can.
 //   2. WASM fallback via `getPageTextLayout` (text only) — runs entirely
 //      in-process through @rhwp/core. No CLI binary needed. Reconstructs
-//      lines by grouping text runs by y-coordinate. Markdown tables are
-//      NOT formatted (they appear inline as cell text); pass --format text
-//      explicitly when running on this path so the result is consistent.
+//      lines by grouping text runs by y-coordinate. Tables are FLATTENED
+//      to document-order cell text on this path — merged cells lose their
+//      grid position, which corrupts record-oriented reading. When the
+//      document contains tables this script warns loudly on stderr and
+//      points to extract_tables.mjs (structured, address-aware, no CLI
+//      needed). Never read table data off the flattened output.
 //
 // `read.mjs` chooses backend automatically: tries CLI first, falls back to
 // WASM with a one-line stderr note. SVG always runs in-process.
@@ -25,7 +28,7 @@
 // extraction the script writes a single concatenated stream with form-feed
 // (U+000C) page separators between pages.
 
-import { loadDocument } from "./_bootstrap.mjs";
+import { documentHasTable, loadDocument } from "./_bootstrap.mjs";
 import { resolveCli } from "./_resolve_cli.mjs";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
@@ -37,6 +40,17 @@ function arg(name, dflt) {
   return i >= 0 ? process.argv[i + 1] : dflt;
 }
 
+// Surface load failures as a clean one-line diagnostic instead of a raw
+// Node/engine stack trace (ENOENT, corrupt CFB, etc.).
+async function loadOrExit(path) {
+  try {
+    return await loadDocument(path);
+  } catch (e) {
+    process.stderr.write(`error: cannot read ${path}: ${e?.message ?? e}\n`);
+    process.exit(1);
+  }
+}
+
 const inputPath = process.argv[2];
 if (!inputPath || inputPath.startsWith("--")) {
   console.error("usage: read.mjs <input.hwp|.hwpx> [--format text|markdown|svg] [--page N|all]");
@@ -46,7 +60,7 @@ const format = arg("--format", "text");
 const pageArg = arg("--page", "all");
 
 if (format === "svg") {
-  const doc = await loadDocument(inputPath);
+  const doc = await loadOrExit(inputPath);
   const total = doc.pageCount();
   const pages = pageArg === "all" ? [...Array(total).keys()] : [parseInt(pageArg, 10)];
   for (const p of pages) process.stdout.write(doc.renderPageSvg(p));
@@ -81,14 +95,28 @@ if (format === "svg") {
   } else {
     // WASM fallback. getPageTextLayout returns {runs:[{text,x,y,w,h,...}]}.
     // Group by y (within tolerance), sort by x within a line, join texts.
-    if (format === "markdown") {
+    const doc = await loadOrExit(inputPath);
+    if (documentHasTable(doc)) {
+      // Flattening is not just cosmetic for tables: a merged cell's text is
+      // stored once (at its origin), so document-order flattening glues it
+      // onto whichever cell serializes next — reading the flattened output
+      // row-by-row WILL misattribute values across records.
       process.stderr.write(
-        "note: rhwp CLI not found; using WASM text extraction. Tables are not formatted as markdown grids on this path. Set $RHWP_BIN if you need full markdown.\n",
+        "WARNING: this document contains tables, and the rhwp CLI is not available.\n" +
+          "         WASM text extraction FLATTENS tables to document-order cell text;\n" +
+          "         merged cells (rowSpan/colSpan) lose their grid position, so values\n" +
+          "         can appear attached to the wrong row/record. Do NOT read table data\n" +
+          "         from this output. Use instead:\n" +
+          "           node scripts/extract_tables.mjs <input>\n" +
+          "         (structured grid with cell addresses + merge info; no CLI needed)\n",
+      );
+    } else if (format === "markdown") {
+      process.stderr.write(
+        "note: rhwp CLI not found; using WASM text extraction. Set $RHWP_BIN if you need full markdown.\n",
       );
     } else {
       process.stderr.write("note: rhwp CLI not found; using WASM text extraction.\n");
     }
-    const doc = await loadDocument(inputPath);
     const total = doc.pageCount();
     const pages = pageArg === "all" ? [...Array(total).keys()] : [parseInt(pageArg, 10)];
     for (let pi = 0; pi < pages.length; pi++) {

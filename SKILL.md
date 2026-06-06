@@ -21,7 +21,7 @@ Read first, edit second, verify visually third. The visual verification step mat
 
 What this means per task type:
 
-- **Read-only / extraction / vision tasks**: fully reliable, both formats. Use freely.
+- **Read-only / extraction / vision tasks**: reliable, both formats — with one trap: plain text extraction **flattens tables**, which silently misplaces merged-cell values. For table data always use `extract_tables.mjs` (see "Structured table extraction" below).
 - **Find/replace / structural edits**: save as `.hwp`. One residual engine bug remains — **HWP save can silently drop some edits** (`replaceAll` reports count=28 in-memory, the on-disk file shows zero). `replace.mjs` auto-detects this on reload and reports `verified: false`; treat that as a failed task. There is no `.hwpx` fallback.
 - **Form filling**: save as `.hwp`. Filled values may inherit placeholder styling (red/bold/italic), and on pre-populated fields the current engine build can corrupt metadata (upstream #838, fixed on rhwp devel, not yet in our build) — visually verify the output.
 - **Create-from-scratch**: reliable. A doc built fresh via `create.mjs` saves cleanly to `.hwp` and Hancom Office reads it.
@@ -35,6 +35,7 @@ This is a fork of the rhwp engine; the bugs are upstream. Do not promise round-t
 |---|---|
 | Inspect an unfamiliar file | `node scripts/info.mjs <input>` — JSON: pages, sections, fonts, dimensions |
 | Read text content | `node scripts/read.mjs <input> --format text` (or `--format markdown`) |
+| Extract table data (structured) | `node scripts/extract_tables.mjs <input>` — address/merge-aware grid, JSON or markdown |
 | Quick visual preview (SVG) | `node scripts/read.mjs <input> --format svg --page N` |
 | Vision-quality page image | `node scripts/render.mjs <input> --page N --output page.png` |
 | Find/replace and save | `node scripts/replace.mjs <input> --query <q> --replacement <r> --output <out>` |
@@ -50,7 +51,7 @@ The skill ships with the rhwp WASM bundle vendored under `vendor/rhwp/` — the 
 
 The `rhwp` CLI binary improves two paths but is not strictly required:
 1. `scripts/render.mjs` — PNG rendering via native skia. **Required** for PNG output (the WASM build doesn't have a raster path).
-2. `scripts/read.mjs --format text|markdown` — text extraction is more accurate via the native path (markdown gets proper table grids, image references). **Optional**: when the CLI isn't found, `read.mjs` falls back automatically to WASM-based extraction via `getPageTextLayout` and emits a one-line stderr note. Tables on the WASM fallback appear as inline cell text rather than markdown grids; body content is intact.
+2. `scripts/read.mjs --format text|markdown` — text extraction is more accurate via the native path (markdown gets proper table grids, image references). **Optional**: when the CLI isn't found, `read.mjs` falls back automatically to WASM-based extraction via `getPageTextLayout`. Body text is intact on the fallback, but **tables are flattened to document-order cell text — a data-corruption hazard for merged cells, not a cosmetic one** (the script warns loudly when the document has tables). Table data must come from `extract_tables.mjs` instead, which needs no CLI.
 
 Resolution order in `_resolve_cli.mjs`:
 1. `$RHWP_BIN` env var
@@ -82,6 +83,36 @@ node scripts/read.mjs document.hwp --format svg --page 0 > preview.svg
 ```
 
 SVG output is structural-fidelity, not pixel-perfect. Don't trust it for typography decisions; use `render.mjs` PNG when fidelity matters.
+
+## Structured table extraction
+
+**Never read table data out of flattened text extraction.** A merged cell (`rowSpan`/`colSpan` > 1) is stored once, at its origin; in flattened document-order text it visually glues onto whichever cell happens to come next. Real-world failure: in a batch of 22 identical government forms, a student name spanning 7 merged rows kept attaching itself to a neighboring record's field — every record-oriented reading of flattened table text risks exactly this. The same hazard applies to `read.mjs` output on the WASM-fallback path (it warns on stderr when the document has tables) and to any ad-hoc "strip the XML tags" approach.
+
+`extract_tables.mjs` is the safe path. It rebuilds each table as a row×col grid from cell addresses and span footprints, for both `.hwp` and `.hwpx`, with no CLI binary needed:
+
+```bash
+node scripts/extract_tables.mjs form.hwpx                      # all tables, JSON
+node scripts/extract_tables.mjs form.hwpx --format markdown    # human-readable grids
+node scripts/extract_tables.mjs form.hwpx --table 2            # one table (plus its nested tables)
+node scripts/extract_tables.mjs form.hwpx --fill-merged        # replicate origin text into covered cells
+```
+
+JSON shape: `{input, sourceFormat, tableCount, tables: [{index, section, paragraph, rowCount, colCount, grid}]}` where `grid[r][c]` is `{text, rowSpan, colSpan, origin: true}` at a cell's origin, `{text, origin: false, originRow, originCol}` for positions covered by a span, or `null`. Nested tables (a table inside a cell) are discovered recursively and appear as separate entries with `nestedIn` + `hostCell`; the hosting cell's grid entry lists them in `nestedTables`. Cell text is NFC-normalized; in-cell paragraphs and line breaks arrive as real `\n`.
+
+**`--fill-merged` is the flag for record extraction.** When a column like 성명 uses one merged cell per record (rowSpan = rows-per-record), filling makes every row self-contained, so grouping rows into records is a simple scan.
+
+Reading Korean public-sector form tables, expect these conventions (interpret with judgment — they vary by form family):
+
+- **Record boundaries** follow the merged cell in the 연번 (sequence) column: one record spans from a sequence origin row to the next.
+- **Field content** inside a 상세내용 (detail) column comes in two styles: *marker form* (each row starts with ①②③…) or *label form* (`저자: …`, `DOI: …` with a colon). Both put each field on its own table **row**, not in one multi-line cell.
+- **Legend/instruction tables ride along**: forms commonly append a 범례 (legend) or 작성요령 (instructions) table after the data table. Check header keywords (e.g. does the header row contain 연번?) before treating a table as data.
+- **Empty-looking cells often hold placeholder text** (`번호`, `해당없음`, `-`, `X`, `;N` …) — template residue, not data. Filter by meaning, not just emptiness.
+- **PUA characters** (U+E000–U+F8FF and beyond) are Hancom custom glyphs (checkboxes, symbols); they survive extraction as-is and may render as tofu. Treat them as symbols, not text.
+
+Two engine caveats on the current vendored bundle (rhwp v0.7.10):
+
+- **HWPX cell text loses literal `&`, `<`, `>`** — the engine's HWPX parser drops XML entities, so "R&D" reads as "RD" and `<사>` as `사`. The same document's `.hwp` version reads correctly; prefer the `.hwp` twin when both exist and ampersands/brackets matter. Fixed upstream in rhwp v0.7.12; goes away when the bundle is rebuilt.
+- **Full-width spaces** (`hp:fwSpace`, 전각 공백) surface as U+2007 FIGURE SPACE, not U+3000 — match whitespace with `\s` rather than literal spaces.
 
 ## Editing existing documents
 
@@ -201,9 +232,11 @@ Then read the PNG back and confirm the layout is what was expected. **Do not dec
 ## Common pitfalls
 
 - **Trying to write `.hwpx`.** All write scripts refuse `--output *.hwpx` (exit 2) — native HWPX save produces files Hancom Office rejects. Always emit `.hwp`, even when the input was `.hwpx`. If the user explicitly asks for an `.hwpx` deliverable, explain the engine limitation instead of working around the guard with an ad-hoc `exportHwpx()` call.
+- **Reading table data from flattened text.** Merged cells are stored once at their origin; flattened extraction (WASM-fallback `read.mjs`, naive XML stripping) glues that text onto the wrong neighbor — records silently absorb other records' values. Always use `extract_tables.mjs` for table data, and `--fill-merged` when grouping rows into records.
+- **macOS Korean filenames are NFD.** Files saved on macOS carry decomposed Hangul names (`한글.hwpx` as `ㅎ+ㅏ+ㄴ…`), so a glob/comparison against an NFC literal in your code silently matches **zero files**. Don't glob with Korean literals — scan the directory and compare with `name.normalize("NFC")` (Node) / `unicodedata.normalize("NFC", name)` (Python).
 - **Not visually verifying.** Text extraction can pass while the actual page is broken (missing characters, overflowing tables, font fallback issues). Render PNG and look.
 - **Assuming replace succeeded.** `replace.mjs` exits non-zero on no-match. Check exit codes; do not chain blindly.
-- **Trusting exit 0 alone on HWP output.** Because of the HWP edit-loss bug, `replace.mjs` can exit 0 with `count: N` while the saved `.hwp` actually contains zero of the new strings. **Always read the `verified` field from `replace.mjs`'s JSON output before telling the user the edit succeeded.** `verified: false` means the engine accepted the edit in-memory but the saved file does not show it on reload — treat that as a failed task, not a successful one. Use `--strict` if you want non-zero exit on `verified: false` (exit code 4).
+- **Trusting exit 0 alone on HWP output.** Because of the HWP edit-loss bug, `replace.mjs` can exit 0 with `replaced: N` while the saved `.hwp` actually contains zero of the new strings. **Always read the `verified` field from `replace.mjs`'s JSON output before telling the user the edit succeeded.** `verified: false` means the engine accepted the edit in-memory but the saved file does not show it on reload — treat that as a failed task, not a successful one. Use `--strict` if you want non-zero exit on `verified: false` (exit code 4).
 - **`replaceOne` skips tables and textboxes.** Without `--all`, the engine only searches the body. If your target is inside a table cell or text box and you don't pass `--all`, you'll get a no-match error even though the string is visibly present. `--all` covers everything; use it whenever in doubt.
 - **`createBlankDocument` is required after `createEmpty`.** A bare `createEmpty()` produces a doc with zero sections, so `insertText(0, 0, 0, ...)` fails. The bootstrap helper does this for you; if you call `createEmpty` directly, you must follow with `createBlankDocument()`.
 - **Newlines in `insert_text` don't split paragraphs.** Each `insert_text` writes into one paragraph. To start a new paragraph, emit `insert_paragraph` first. This matches the engine's IR — paragraphs are first-class structural units, not delimited by `\n`.
