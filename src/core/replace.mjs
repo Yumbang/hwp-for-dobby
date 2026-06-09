@@ -38,8 +38,8 @@ import { exportVerify } from "../lib/verify.mjs";
 const USAGE =
   "usage: replace.mjs <input> --query <text> --replacement <text> [--case-sensitive] --output <out.hwp>";
 
-// Option parsing in the style of the port source (scripts/replace.mjs) and the
-// sibling core scripts: one positional input plus named flags. Kept small.
+// Option parsing in the style of the sibling core scripts: one positional
+// input plus named flags. Kept small.
 function arg(name) {
   const i = process.argv.indexOf(name);
   return i >= 0 ? process.argv[i + 1] : undefined;

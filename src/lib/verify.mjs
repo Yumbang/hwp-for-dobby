@@ -10,7 +10,8 @@
 //
 // Every edit script routes its save through exportVerify(); a `verified:
 // false` result is a FAILED task (exit CORRUPTION=5), never reported as
-// success. Generalizes the pattern originally in scripts/replace.mjs.
+// success. Generalizes the round-trip-verify pattern from the original
+// find/replace script.
 
 import { loadDocument, atomicWriteFile, assertHwpOutput } from "./_bootstrap.mjs";
 
