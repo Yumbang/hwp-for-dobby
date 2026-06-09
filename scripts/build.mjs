@@ -39,11 +39,13 @@
 
 import { spawnSync } from "node:child_process";
 import {
+  copyFileSync,
   existsSync,
   mkdirSync,
   readdirSync,
   rmSync,
   statSync,
+  utimesSync,
 } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -148,21 +150,54 @@ if (posixMembers.length === 0) {
   fail(EXIT.LOAD, "build: allowlist resolved to zero files");
 }
 
-// ── 2. Run the system zip deterministically ─────────────────────────────────
+// ── 2. Stage with fixed timestamps, then zip deterministically ───────────────
 mkdirSync(OUT_DIR, { recursive: true });
 // Remove any prior archive so `zip` writes a fresh one (zip otherwise UPDATES
 // an existing archive in place, which would defeat determinism).
 if (existsSync(OUT_PATH)) rmSync(OUT_PATH);
 
+// Copy the members into a staging tree and stamp every file and directory with
+// a fixed mtime. `zip -X` already drops uid/gid and extended attributes, but it
+// still stores each entry's modification time — and a git checkout/merge
+// rewrites those, so the archive bytes would otherwise change for identical
+// content. Staging lets us normalize the times without touching the source
+// tree. We also run zip under TZ=UTC because ZIP stores DOS timestamps in local
+// time; together this makes the build byte-identical across rebuilds and across
+// machines/timezones.
+const STAGE = join(OUT_DIR, ".stage");
+const FIXED = new Date("2020-01-01T00:00:00Z");
+rmSync(STAGE, { recursive: true, force: true });
+for (const m of posixMembers) {
+  const dst = join(STAGE, m);
+  mkdirSync(dirname(dst), { recursive: true });
+  copyFileSync(join(ROOT, m), dst);
+}
+// Stamp files first, then directories deepest-first (copying a file into a dir
+// bumps that dir's mtime, so dirs must be stamped after their contents).
+for (const m of posixMembers) utimesSync(join(STAGE, m), FIXED, FIXED);
+const stageDirs = new Set();
+for (const m of posixMembers) {
+  let d = dirname(m);
+  while (d && d !== ".") {
+    stageDirs.add(d);
+    d = dirname(d);
+  }
+}
+for (const d of [...stageDirs].sort((a, b) => b.length - a.length)) {
+  utimesSync(join(STAGE, d), FIXED, FIXED);
+}
+
 const zip = spawnSync(
   "zip",
   ["-X", "-@", OUT_PATH],
   {
-    cwd: ROOT,
+    cwd: STAGE,
     input: posixMembers.join("\n") + "\n",
     encoding: "utf8",
+    env: { ...process.env, TZ: "UTC" },
   },
 );
+rmSync(STAGE, { recursive: true, force: true });
 if (zip.error) {
   fail(EXIT.UNSUPPORTED, `build: failed to spawn 'zip': ${zip.error.message}`);
 }
