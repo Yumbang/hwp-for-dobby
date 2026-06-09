@@ -7,7 +7,15 @@
   "engines": {
     "node": ">=18"
   },
+  "scripts": {
+    "test": "node --test 'test/**/*.test.mjs'",
+    "test:pin": "node --test test/pin-integrity.test.mjs",
+    "test:smoke": "node --test test/smoke.test.mjs",
+    "build": "node scripts/build.mjs",
+    "vendor-sync": "node scripts/vendor-sync.mjs",
+    "bump": "node scripts/bump.mjs"
+  },
   "dependencies": {
-    "@rhwp/core": "^0.7.10"
+    "@rhwp/core": "0.7.15"
   }
 }
