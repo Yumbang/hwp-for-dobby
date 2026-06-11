@@ -21,6 +21,11 @@ export const EXIT = Object.freeze({
   NOT_FOUND: 3,
   UNSUPPORTED: 4,
   CORRUPTION: 5,
+  //   6 UNSAFE        refused to prevent silent data loss the engine can't
+  //                   avoid (e.g. editing a memo-bearing document drops its
+  //                   memos). The script blocks unless the documented override
+  //                   flag is passed — see lib/memo.mjs.
+  UNSAFE: 6,
 });
 
 const NAME = Object.freeze({
@@ -30,6 +35,7 @@ const NAME = Object.freeze({
   3: "NOT_FOUND",
   4: "UNSUPPORTED",
   5: "CORRUPTION",
+  6: "UNSAFE",
 });
 
 // Print `message` to stderr (newline-terminated) and exit with `code`.

@@ -51,6 +51,14 @@
 
 ---
 
+## 2a. Memos (메모/주석 — 조용한 삭제)
+
+> **핵심 원리.** rhwp 엔진의 IR은 **메모(메모/주석, comment annotation)를 모델링하지 않는다.** 메모는 오직 HWP5의 **섹션별 `raw_stream` 패스트패스**로만 살아남는다 — 그 섹션을 건드리는 편집이 일어나는 순간, 섹션은 메모를 한 번도 담은 적 없는 IR로부터 재직렬화되고 그 안의 모든 메모가 **저장 시 에러 없이 삭제**된다(규칙 9의 raw_stream 메커니즘과 동일 뿌리, 단 여기선 드롭되는 게 *편집*이 아니라 *기존 메모*다).
+
+29. **메모-보유 섹션 편집은 메모를 조용히 삭제한다.** 메모가 들어 있는 섹션에 어떤 편집(`insertText`/`replaceText`/셀 편집 등 raw_stream을 null로 비우는 안전 경로 포함)이라도 가하면, 저장 시 그 섹션의 **모든 메모가 사라진다** — in-memory에선 성공으로 보이고 에러도 없다. 스킬은 편집 전 **메모를 탐지**(`src/lib/memo.mjs` — 순수 JS CFB/ZIP 파서, 무의존성: `detectMemos`/`readMemos`)하고, 메모가 있으면 `assertMemoSafe`가 **편집을 차단**한다(exit `UNSAFE(6)`, `--allow-memo-loss`로만 우회). 메모는 `read.mjs --memos`로 읽을 수 있다. — **CONFIRMED (실제 .hwp에서 검증: 메모 13개, 메모 보유 섹션 1회 편집 후 0개).** `test:` `fixture-memo.hwpx`(메모 1개 "테스트 메모입니다")에서 `detectMemos.count===1`·`readMemos`가 본문을 반환하고, 메모 없는 `fixture-table.hwp`/`fixture-form.hwp`는 `count===0`임을 단정; `assertMemoSafe`가 `--allow-memo-loss` 없이 `EXIT.UNSAFE(6)`로 종료함을 단정.
+
+---
+
 ## 3. Forms (폼 필드)
 
 17. **빈 폼 필드 값은 왕복 생존.** `setFieldValueByName(name, value)`는 IR 업데이트 경로(raw_stream fast-path 아님)로 라우팅되어 .hwp export/reload에서 값이 보존된다. — **CONFIRMED.** `test:` `fixture-form.hwp`의 `setFieldValueByName('myMsg01','PERSIST_TEST_0715')` → reload 시 값 일치 단정.
@@ -88,6 +96,7 @@
 | **find/replace — `replaceText`(위치) / safe path** | WORKS | WORKS |
 | **in-cell edit** (`insertTextInCell`/`deleteTextInCell`) | WORKS | WORKS |
 | **in-cell edit — OOB cell (`cell_idx≥cellCount`)** | **HANCOM-REJECTED** (throw → undefined 반환, 하드 실패) | HANCOM-REJECTED *(미검증, .hwp 거동으로 추정)* |
+| **edit a memo-bearing section** (메모 보유 문서 편집) | **BLOCKED-DATA-LOSS** (메모 미모델링 → 저장 시 조용히 삭제; `assertMemoSafe`가 exit `UNSAFE(6)`로 차단, `--allow-memo-loss`로만 우회) | BLOCKED-DATA-LOSS |
 | **form fill — 빈 필드** | WORKS | WORKS |
 | **form fill — 사전 채워진 필드** | **WORKS+WARN** (#838 char-shape 손실 → 한컴 거부 가능) | WORKS+WARN |
 | **table formula** (`evaluateTableFormula`) | WORKS (일회성, 자동 재계산 없음) | WORKS |
@@ -95,7 +104,7 @@
 | **create-from-scratch** (`emptyDocument`→`insertText`→`exportHwp`) | WORKS (출력 .hwp) | — (입력 없음) |
 | **save as HWPX** (`exportHwpx`) | **HANCOM-REJECTED** (스킬 차단; .hwp만 출력) | HANCOM-REJECTED |
 
-> 범례: **WORKS** = export→reload 왕복 생존 검증. **FAILS-SILENTLY** = in-memory 성공 보고하나 reload 시 편집 없음(verified=false), 에러 없음 → **스킬 금지 경로**. **HANCOM-REJECTED** = throw 또는 한컴이 산출물 거부(하드 실패). **WORKS+WARN** = 동작하나 알려진 위험으로 경고 필요. *기울임 주석* = 경험적 미검증(추정).
+> 범례: **WORKS** = export→reload 왕복 생존 검증. **FAILS-SILENTLY** = in-memory 성공 보고하나 reload 시 편집 없음(verified=false), 에러 없음 → **스킬 금지 경로**. **HANCOM-REJECTED** = throw 또는 한컴이 산출물 거부(하드 실패). **BLOCKED-DATA-LOSS** = 편집 자체는 동작하나 저장 시 기존 메모를 조용히 삭제 → **스킬이 기본 차단**(exit UNSAFE(6), `--allow-memo-loss`로만 우회). **WORKS+WARN** = 동작하나 알려진 위험으로 경고 필요. *기울임 주석* = 경험적 미검증(추정).
 
 ---
 
@@ -117,7 +126,7 @@
 
 ## Catalog → Rule 추적표 (커버리지 감사)
 
-워크플로 탐색이 채굴한 21개 코너케이스가 각각 위 규칙에 매핑됨(키스톤 보장: "모든 코너케이스 = 테스트 하나").
+워크플로 탐색이 채굴한 22개 코너케이스가 각각 위 규칙에 매핑됨(키스톤 보장: "모든 코너케이스 = 테스트 하나").
 
 | Catalog | 주제 | Rule | Catalog | 주제 | Rule |
 |---|---|---|---|---|---|
@@ -131,6 +140,6 @@
 | #8 | replaceAll 드롭 | 9 | #19 | control_mask 가드 | 27 (non-asserting) |
 | #9 | 안전 경로 insert/delete | 10–15 | #20 | cell-padding clamp | 26 |
 | #10 | OOB 셀 throw | 15 | #21 | HWPX 출력 거부 | 23 |
-| #11 | header/footer apply_to | 28 | | | |
+| #11 | header/footer apply_to | 28 | #22 | 메모 미모델링/조용한 삭제 | 29 |
 
-**관련 파일(절대 경로):** `/Users/ybang_mac/Development/side-projects/rhwp-cli/hwp/src/lib/_bootstrap.mjs`, `.../hwp/src/lib/verify.mjs`, `.../hwp/vendor/rhwp/rhwp.d.ts`, `.../hwp/vendor/rhwp/VERSION` (= `0.7.15`).
+**관련 파일(절대 경로):** `/Users/ybang_mac/Development/side-projects/rhwp-cli/hwp/src/lib/_bootstrap.mjs`, `.../hwp/src/lib/verify.mjs`, `.../hwp/src/lib/memo.mjs` (메모 탐지/읽기/가드), `.../hwp/vendor/rhwp/rhwp.d.ts`, `.../hwp/vendor/rhwp/VERSION` (= `0.7.15`).

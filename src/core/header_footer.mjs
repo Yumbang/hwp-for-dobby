@@ -51,6 +51,7 @@
 
 import { loadDocument } from "../lib/_bootstrap.mjs";
 import { EXIT, fail } from "../lib/exit-codes.mjs";
+import { assertMemoSafe } from "../lib/memo.mjs";
 import { exportVerify } from "../lib/verify.mjs";
 
 function arg(name, dflt) {
@@ -109,6 +110,10 @@ if (op === "apply") {
 } else if (templateArg !== undefined) {
   fail(EXIT.USAGE, `error: --template is only valid with --op apply (create makes an empty header/footer)`);
 }
+
+// Refuse a memo-bearing input (the engine drops memos on save) unless the
+// caller passed --allow-memo-loss. No-op on memo-free inputs.
+assertMemoSafe(input, process.argv);
 
 const doc = await loadDocument(input);
 

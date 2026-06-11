@@ -32,6 +32,7 @@
 
 import { loadDocument } from "../lib/_bootstrap.mjs";
 import { EXIT, fail } from "../lib/exit-codes.mjs";
+import { assertMemoSafe } from "../lib/memo.mjs";
 import { safeReplaceAll } from "../lib/safe-edit.mjs";
 import { exportVerify } from "../lib/verify.mjs";
 
@@ -61,6 +62,10 @@ if (flag("-h") || flag("--help")) {
 if (!input || input.startsWith("-") || !query || replacement === undefined || !output) {
   fail(EXIT.USAGE, USAGE);
 }
+
+// Refuse a memo-bearing input (the engine drops memos on save) unless the
+// caller passed --allow-memo-loss. No-op on memo-free inputs.
+assertMemoSafe(input, process.argv);
 
 let doc;
 try {

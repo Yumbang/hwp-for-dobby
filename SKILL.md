@@ -31,6 +31,7 @@ Output is **always HWP 5.0 (`.hwp`)**. Native HWPX save is rejected by Hancom Of
 |---|---|
 | Inspect an unfamiliar file | `node src/core/info.mjs <in> [--validate]` |
 | Read body text | `node src/core/read.mjs <in> --format text` |
+| Read memos (메모/주석) | `node src/core/read.mjs <in> --memos` |
 | **Extract table DATA (safe)** | `node src/core/extract_tables.mjs <in> [--format json\|markdown] [--data-tables-only] [--drop-empty] [--detect-form-type]` |
 | Find & replace (safe, saves) | `node src/core/replace.mjs <in> --query <q> --replacement <r> --output <out.hwp>` |
 | Insert/delete body text | `node src/core/edit_text.mjs <in> --op insert\|delete\|insert-paragraph ... --output <out.hwp>` |
@@ -47,7 +48,7 @@ Output is **always HWP 5.0 (`.hwp`)**. Native HWPX save is rejected by Hancom Of
 | **Precise text/markdown** (code) | `node src/enhanced/read_precise.mjs <in> --format text\|markdown` |
 | IR/layout debug (code) | `node src/enhanced/debug.mjs <in> --op dump\|dump-pages\|ir-diff\|thumbnail ...` |
 
-Scripts are ESM (Node 18+), print one-line JSON or extracted content on stdout, and exit non-zero on failure. Exit codes are uniform: **0** ok · **1** load/parse · **2** usage / bad output target · **3** target not found · **4** unsupported here (enhanced needs the CLI) · **5** engine-detected corruption / round-trip verify failed.
+Scripts are ESM (Node 18+), print one-line JSON or extracted content on stdout, and exit non-zero on failure. Exit codes are uniform: **0** ok · **1** load/parse · **2** usage / bad output target · **3** target not found · **4** unsupported here (enhanced needs the CLI) · **5** engine-detected corruption / round-trip verify failed · **6** UNSAFE — refused to prevent silent data loss, override available (e.g. editing a memo-bearing file without `--allow-memo-loss`).
 
 ## When NOT to use this skill
 
@@ -98,6 +99,7 @@ Every editing script (`edit_text`, `edit_cell`, `table`, `format`, `header_foote
 | exit `4` from an enhanced script | no `rhwp` CLI (not on Claude Code) | use a core script; tell the user PNG/PDF/precise-read need Claude Code + the binary |
 | exit `2` on `--output x.hwpx` | HWPX output is blocked | save as `.hwp` |
 | exit `5` on form fill | filled value didn't survive | the field/doc is problematic; surface it |
+| exit `6` editing a file with memos | engine can't model memos — editing their section silently deletes them on save | guard blocks (exit 6); read them with `read.mjs --memos`, or pass `--allow-memo-loss` to edit and lose them |
 | Hancom rejects a filled form | pre-filled field char-shape (#838) | warn was printed; fill empty fields only, or accept the risk and visually verify |
 | merged-cell data looks shifted | table read from flattened text | re-read with `extract_tables.mjs` |
 | `R&D` etc. special chars | (was a ≤0.7.11 bug) | fine on 0.7.15 — `&`/`<`/`>` preserved |
@@ -113,6 +115,7 @@ Every editing script (`edit_text`, `edit_cell`, `table`, `format`, `header_foote
 | form fill — pre-filled field | WORKS+WARN (#838) | WORKS+WARN |
 | create from scratch | WORKS (→ `.hwp`) | — |
 | `replaceAll` (raw engine) | **FAILS-SILENTLY** — never used directly | WORKS |
+| edit a file that has memos | **BLOCKED** (exit 6; memos deleted on save, override `--allow-memo-loss`) | BLOCKED |
 | save as HWPX | **BLOCKED** (Hancom-rejected) | BLOCKED |
 
-Engine pinned to rhwp **0.7.15** (`vendor/rhwp/VERSION`). Known live limitations on this build: `replaceAll`-drop (routed around), form #838 (warned), shapes/charts not supported. The full, test-backed rule set is in `spec/rhwp-behavior.md`; `test/` enforces it.
+Engine pinned to rhwp **0.7.15** (`vendor/rhwp/VERSION`). Known live limitations on this build: `replaceAll`-drop (routed around), form #838 (warned), memos not modeled (editing their section deletes them on save — guarded, exit 6, override `--allow-memo-loss`; read with `read.mjs --memos`), shapes/charts not supported. The full, test-backed rule set is in `spec/rhwp-behavior.md`; `test/` enforces it.

@@ -34,6 +34,7 @@
 import { loadDocument } from "../lib/_bootstrap.mjs";
 import { exportVerify } from "../lib/verify.mjs";
 import { EXIT, fail } from "../lib/exit-codes.mjs";
+import { assertMemoSafe } from "../lib/memo.mjs";
 import { readFileSync } from "node:fs";
 
 const USAGE =
@@ -98,6 +99,11 @@ const output = arg("--output");
 if (!valuesPath || !output) {
   fail(EXIT.USAGE, `error: --values <json> and --output <out.hwp> are both required\n${USAGE}`);
 }
+
+// Write path only (NOT --list, which is read-only): refuse a memo-bearing input
+// (the engine drops memos on save) unless the caller passed --allow-memo-loss.
+// No-op on memo-free inputs.
+assertMemoSafe(inputPath, process.argv);
 
 // Parse the values map up front so a malformed file fails before any mutation.
 let values;

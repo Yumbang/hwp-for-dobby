@@ -2,8 +2,16 @@
 // Usage:
 //   node src/core/read.mjs <input.hwp|.hwpx> [--format text|svg] [--page N|all]
 //                                            [--mode strict|best-effort]
+//   node src/core/read.mjs <input.hwp|.hwpx> --memos [--format text|json]
 //
 // Default: --format text --page all --mode strict.
+//
+// MEMOS (--memos): the rhwp engine does NOT model document memos (메모/주석
+// comment annotations) — they live only in the container and are silently
+// dropped the moment an edit touches their section (see lib/memo.mjs). The edit
+// guard (assertMemoSafe) points users here to read them first. With --memos we
+// bypass body-text extraction entirely and print the memos read straight from
+// the container: JSON by default, or "[N] <text>" blocks with --format text.
 //
 // CORE TIER — WASM ONLY. This script runs entirely in-process through the
 // vendored @rhwp/core WASM bundle and behaves identically on claude.ai /
@@ -45,10 +53,15 @@
 
 import { documentHasTable, loadDocument } from "../lib/_bootstrap.mjs";
 import { EXIT, fail } from "../lib/exit-codes.mjs";
+import { readMemos } from "../lib/memo.mjs";
 
 function arg(name, dflt) {
   const i = process.argv.indexOf(name);
   return i >= 0 ? process.argv[i + 1] : dflt;
+}
+
+function hasFlag(name) {
+  return process.argv.includes(name);
 }
 
 // Surface load failures as a clean one-line diagnostic instead of a raw
@@ -73,9 +86,40 @@ const inputPath = process.argv[2];
 if (!inputPath || inputPath.startsWith("--")) {
   fail(
     EXIT.USAGE,
-    "usage: read.mjs <input.hwp|.hwpx> [--format text|svg] [--page N|all] [--mode strict|best-effort]",
+    "usage: read.mjs <input.hwp|.hwpx> [--format text|svg] [--page N|all] [--mode strict|best-effort]\n" +
+      "       read.mjs <input.hwp|.hwpx> --memos [--format text|json]",
   );
 }
+
+// ── MEMOS ───────────────────────────────────────────────────────────────────
+// --memos short-circuits the whole read path: no WASM, no body-text walk. It
+// reads memos straight from the container (lib/memo.mjs) so the user can see
+// what an edit would silently drop. This is the command the edit guard points
+// to. Output is JSON by default, or "[N] <text>" blocks with --format text.
+if (hasFlag("--memos")) {
+  const memoFormat = arg("--format", "json");
+  if (memoFormat !== "json" && memoFormat !== "text") {
+    fail(EXIT.USAGE, `unknown --format for --memos: ${memoFormat} (expected json|text)`);
+  }
+  let memos;
+  try {
+    memos = readMemos(inputPath);
+  } catch (e) {
+    fail(EXIT.LOAD, `error: cannot read ${inputPath}: ${e?.message ?? e}`);
+  }
+  if (memoFormat === "json") {
+    // Always valid JSON — an empty array when there are no memos.
+    process.stdout.write(JSON.stringify(memos, null, 2) + "\n");
+  } else if (memos.length === 0) {
+    process.stdout.write("(no memos)\n");
+  } else {
+    for (const m of memos) {
+      process.stdout.write(`[${m.index}] ${m.text}\n`);
+    }
+  }
+  process.exit(EXIT.OK);
+}
+
 const format = arg("--format", "text");
 const pageArg = arg("--page", "all");
 const mode = arg("--mode", "strict");

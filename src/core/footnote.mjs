@@ -44,6 +44,7 @@
 import { loadDocument } from "../lib/_bootstrap.mjs";
 import { exportVerify } from "../lib/verify.mjs";
 import { EXIT, fail } from "../lib/exit-codes.mjs";
+import { assertMemoSafe } from "../lib/memo.mjs";
 
 const USAGE =
   "usage: footnote.mjs <input> --op insert|delete --section N --paragraph N\n" +
@@ -116,6 +117,10 @@ function countFootnotes(doc) {
   }
   return n;
 }
+
+// Refuse a memo-bearing input (the engine drops memos on save) unless the
+// caller passed --allow-memo-loss. No-op on memo-free inputs.
+assertMemoSafe(input, process.argv);
 
 // --- load -------------------------------------------------------------------
 let doc;

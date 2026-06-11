@@ -15,8 +15,9 @@ Notes for editing this skill. It wraps the rhwp engine (Rust→WASM, vendored, M
 1. Every edit goes through `exportVerify`. The engine will accept an edit in memory and then drop it silently on save, so nothing's done until you reload and confirm. `verified: false` is a failure (exit 5), not a success.
 2. Never call the engine's `replaceAll` on a `.hwp` — that's the silent-drop trap. Use `safeReplaceAll` (`lib/safe-edit`). On `.hwpx` input `replaceAll` is fine.
 3. Output is always `.hwp`. Hancom rejects our HWPX; `assertHwpOutput` enforces it.
-4. Every rule in `spec/rhwp-behavior.md` has a matching test in `test/spec/`. Learn something new about the engine, write the rule and the test. If the doc and the engine disagree, the engine wins.
-5. Exit codes: 0 ok, 1 load, 2 usage, 3 not-found, 4 unsupported-here, 5 corruption/verify-fail.
+4. Memos (메모/주석) aren't modeled by the engine — they ride along only in a section's `raw_stream`, so any edit to that section deletes them on save with no error. Every write script must call `assertMemoSafe` (`lib/memo`) before editing: it blocks by default (exit 6) and only proceeds with `--allow-memo-loss`. Never silently let an edit drop memos.
+5. Every rule in `spec/rhwp-behavior.md` has a matching test in `test/spec/`. Learn something new about the engine, write the rule and the test. If the doc and the engine disagree, the engine wins.
+6. Exit codes: 0 ok, 1 load, 2 usage, 3 not-found, 4 unsupported-here, 5 corruption/verify-fail, 6 unsafe/refused-data-loss (override available).
 
 ## Engine version
 

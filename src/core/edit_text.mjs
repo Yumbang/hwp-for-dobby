@@ -49,6 +49,7 @@
 
 import { loadDocument } from "../lib/_bootstrap.mjs";
 import { EXIT, fail } from "../lib/exit-codes.mjs";
+import { assertMemoSafe } from "../lib/memo.mjs";
 import { exportVerify } from "../lib/verify.mjs";
 
 const USAGE =
@@ -123,6 +124,10 @@ if (op === "insert") {
   if (cnt < 1) fail(EXIT.USAGE, `error: --count must be >= 1 for delete (got ${cnt})\n${USAGE}`);
 }
 // insert-paragraph needs only --section/--paragraph (already parsed).
+
+// Refuse a memo-bearing input (the engine drops memos on save) unless the
+// caller passed --allow-memo-loss. No-op on memo-free inputs.
+assertMemoSafe(inputPath, process.argv);
 
 let doc;
 try {

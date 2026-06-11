@@ -47,6 +47,7 @@
 
 import { loadDocument } from "../lib/_bootstrap.mjs";
 import { EXIT, fail } from "../lib/exit-codes.mjs";
+import { assertMemoSafe } from "../lib/memo.mjs";
 import { exportVerify } from "../lib/verify.mjs";
 
 const USAGE =
@@ -92,6 +93,10 @@ if (!inputPath || !op || !output) {
 if (!["create", "merge", "split"].includes(op)) {
   fail(EXIT.USAGE, `error: --op must be one of create|merge|split (got ${JSON.stringify(op)})\n${USAGE}`);
 }
+
+// Refuse a memo-bearing input (the engine drops memos on save) unless the
+// caller passed --allow-memo-loss. No-op on memo-free inputs.
+assertMemoSafe(inputPath, process.argv);
 
 // Parse a required numeric flag; fail USAGE if missing or non-integer.
 function num(name) {

@@ -69,6 +69,17 @@ test("retains the raw replaceAll find/replace silent-drop hazard", () => {
   );
 });
 
+test("retains the memo silent-data-loss disclosure + override flag", () => {
+  assert.ok(
+    contains("memo"),
+    "LOST DISCLOSURE: 'memo' is no longer mentioned — agents would edit a memo-bearing file and silently delete every memo on save (the engine can't model them).",
+  );
+  assert.ok(
+    contains("--allow-memo-loss"),
+    "LOST DISCLOSURE: the '--allow-memo-loss' override is gone — the memo guard (exit 6) and its escape hatch are undocumented, so the data-loss block reads as unconditional or invisible.",
+  );
+});
+
 test("retains the extract_tables (no-flattened-text) table-data rule", () => {
   assert.ok(
     contains("extract_tables"),

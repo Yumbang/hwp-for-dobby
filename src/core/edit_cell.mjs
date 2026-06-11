@@ -35,6 +35,7 @@
 
 import { loadDocument } from "../lib/_bootstrap.mjs";
 import { EXIT, fail } from "../lib/exit-codes.mjs";
+import { assertMemoSafe } from "../lib/memo.mjs";
 import { exportVerify } from "../lib/verify.mjs";
 
 const USAGE =
@@ -107,6 +108,10 @@ if ((op === "insert" || op === "set") && (text === undefined || text === "")) {
 if (op === "delete" && (count === undefined || count <= 0)) {
   fail(EXIT.USAGE, `error: --op delete requires --count > 0\n${USAGE}`);
 }
+
+// Refuse a memo-bearing input (the engine drops memos on save) unless the
+// caller passed --allow-memo-loss. No-op on memo-free inputs.
+assertMemoSafe(inputPath, process.argv);
 
 let doc;
 try {
