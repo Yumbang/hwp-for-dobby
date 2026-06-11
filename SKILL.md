@@ -63,8 +63,8 @@ The rhwp WASM bundle ships vendored under `vendor/rhwp/` — no `npm install` ne
 
 ## Reading & extraction
 
-- **`info.mjs`** — JSON summary (pages, sections, sourceFormat, fonts, dimensions, hasTable, field count, engine version). `--validate` adds `getValidationWarnings()` so you can spot a structurally suspect source before extracting.
-- **`read.mjs`** — body text (WASM). **Strict by default**: it does NOT flatten tables (which would misplace merged-cell text); each table becomes a `[table: use extract_tables.mjs for data]` marker plus a stderr warning. `--mode best-effort` flattens inline (with a warning) if you really want it. `--format svg --page N` for a quick visual preview.
+- **`info.mjs`** — JSON summary (pages, sections, sourceFormat, fonts, dimensions, hasTable, **memoCount**, field count, engine version). `--validate` adds `getValidationWarnings()` so you can spot a structurally suspect source before extracting.
+- **`read.mjs`** — body text (WASM). **Strict by default**: it does NOT flatten tables (which would misplace merged-cell text); each table becomes a `[table: use extract_tables.mjs for data]` marker plus a stderr warning. `--mode best-effort` flattens inline (with a warning) if you really want it. `--format svg --page N` for a quick visual preview. **Memos surface automatically**: if the document has memos (메모/주석), a plain read appends a `─── 메모 / memos (N) ───` section after the body (the engine hides memos from normal extraction, so this prevents missing them). `--memos` prints only the memos (JSON, or `--format text`).
 - **`extract_tables.mjs`** — the ONLY safe way to read table data. Rebuilds the grid by cell `{row,col,rowSpan,colSpan}` so a merged cell never leaks onto the wrong record. Flags: `--data-tables-only` (drop legend/작성요령 tables by header keyword, conservative), `--drop-empty` (normalize placeholders 번호/해당없음/-/X to ""), `--detect-form-type` (annotate marker ①②/label/plain), `--fill-merged`, `--table N`, `--no-nested`.
 - **`read_precise.mjs`** (enhanced) — accurate text/markdown via the CLI, with real table grids in markdown. Use on Claude Code when you need a faithful markdown rendering.
 

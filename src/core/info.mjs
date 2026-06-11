@@ -17,6 +17,7 @@
 
 import { loadDocument, version, documentHasTable } from "../lib/_bootstrap.mjs";
 import { EXIT, fail } from "../lib/exit-codes.mjs";
+import { detectMemos } from "../lib/memo.mjs";
 
 // Minimal option parsing: one positional input path plus an optional
 // --validate flag. Kept deliberately small to match the port source.
@@ -67,6 +68,17 @@ try {
   fields = [];
 }
 
+// Memo (메모/주석) count, read straight from the container (the engine has no
+// memo API). Surfaced here so the standard "inspect first" step always reveals
+// memos — they are invisible to body-text extraction and are destroyed by an
+// edit to their section, so an agent must know they exist.
+let memoCount = 0;
+try {
+  memoCount = detectMemos(inputPath).count;
+} catch {
+  memoCount = 0;
+}
+
 const summary = {
   input: inputPath,
   engineVersion: version(),
@@ -74,6 +86,7 @@ const summary = {
   sectionCount: doc.getSectionCount(),
   pageCount,
   hasTable: documentHasTable(doc),
+  memoCount,
   fieldCount: Array.isArray(fields) ? fields.length : 0,
   fonts: Array.isArray(info.fontsUsed) ? info.fontsUsed : [],
   info,

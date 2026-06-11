@@ -277,4 +277,22 @@ if (format === "svg") {
       }
     }
   }
+
+  // Memos (메모/주석) are invisible to body-text extraction and an edit to their
+  // section silently destroys them — so surface them automatically here, after
+  // the body, so a plain read never misses them. (`--memos` reads only memos.)
+  let memos = [];
+  try {
+    memos = readMemos(inputPath);
+  } catch {
+    memos = [];
+  }
+  if (memos.length) {
+    process.stderr.write(
+      `NOTE: this document has ${memos.length} memo(s); appended below (the engine ` +
+        `hides them from normal reads). Read only the memos with --memos.\n`,
+    );
+    process.stdout.write(`\n─── 메모 / memos (${memos.length}) ───\n`);
+    for (const m of memos) process.stdout.write(`[${m.index}] ${m.text}\n`);
+  }
 }
