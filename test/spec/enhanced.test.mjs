@@ -63,17 +63,20 @@ function runWithCli(script, args) {
   });
 }
 
-// Run a script in a NO-CLI environment: PATH points nowhere ('rhwp' cannot be
-// found on PATH), RHWP_BIN is unset, and there is no vendored binary — so
-// tryResolveCli() returns null and requireCli() must degrade. We spawn the
-// ABSOLUTE node (process.execPath), so the child still launches despite the
-// bogus PATH; only the *enhanced* CLI lookup fails, which is the point.
+// Run a script in a NO-CLI environment so requireCli() must degrade. We force
+// it with RHWP_NO_CLI (the resolution escape hatch) — robust even when a
+// vendored binary exists (e.g. a local vendor/bin/ symlink), which a stripped
+// PATH alone would NOT hide. PATH is also blanked for good measure. We spawn
+// the ABSOLUTE node (process.execPath) so the child still launches.
 function runNoCli(script, args) {
   return spawnSync(process.execPath, [script, ...args], {
     cwd: ROOT,
     encoding: "utf8",
-    // Deliberately minimal env with no RHWP_BIN and an unusable PATH.
-    env: { PATH: "/nonexistent", HOME: process.env.HOME || "/tmp" },
+    env: {
+      PATH: "/nonexistent",
+      HOME: process.env.HOME || "/tmp",
+      RHWP_NO_CLI: "1",
+    },
   });
 }
 

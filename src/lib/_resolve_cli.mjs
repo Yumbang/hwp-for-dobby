@@ -42,6 +42,11 @@ function tryBinary(path) {
 
 // Returns the resolved binary path, or null if none found (non-throwing).
 export function tryResolveCli() {
+  // Escape hatch: force the WASM-only (core) tier even where a binary exists.
+  // Lets a caller pin core behavior, and lets the cross-platform tests
+  // deterministically simulate "no CLI" regardless of $PATH or a vendored
+  // binary (e.g. a local vendor/bin/ symlink).
+  if (process.env.RHWP_NO_CLI) return null;
   if (process.env.RHWP_BIN && tryBinary(process.env.RHWP_BIN)) {
     return process.env.RHWP_BIN;
   }
