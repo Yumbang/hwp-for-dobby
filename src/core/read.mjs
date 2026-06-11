@@ -114,7 +114,8 @@ if (hasFlag("--memos")) {
     process.stdout.write("(no memos)\n");
   } else {
     for (const m of memos) {
-      process.stdout.write(`[${m.index}] ${m.text}\n`);
+      process.stdout.write(`[${m.id ?? m.index}] ${m.text}\n`);
+      if (m.anchor) process.stdout.write(`      ↳ 본문/anchored to: "${m.anchor}"\n`);
     }
   }
   process.exit(EXIT.OK);
@@ -293,6 +294,9 @@ if (format === "svg") {
         `hides them from normal reads). Read only the memos with --memos.\n`,
     );
     process.stdout.write(`\n─── 메모 / memos (${memos.length}) ───\n`);
-    for (const m of memos) process.stdout.write(`[${m.index}] ${m.text}\n`);
+    for (const m of memos) {
+      process.stdout.write(`[${m.id ?? m.index}] ${m.text}\n`);
+      if (m.anchor) process.stdout.write(`      ↳ 본문/anchored to: "${m.anchor}"\n`);
+    }
   }
 }

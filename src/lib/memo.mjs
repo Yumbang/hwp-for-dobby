@@ -25,6 +25,12 @@ import { EXIT, fail } from "./exit-codes.mjs";
 const HWPTAG_BEGIN = 0x10;
 const HWPTAG_MEMO_LIST = HWPTAG_BEGIN + 77; // 93
 const HWPTAG_PARA_TEXT = HWPTAG_BEGIN + 51; // 67
+const HWPTAG_CTRL_HEADER = HWPTAG_BEGIN + 55; // 71
+
+// Find the byte offset of `s` encoded UTF-16LE in `buf` (-1 if absent).
+function indexOfUtf16(buf, s) {
+  return buf.indexOf(Buffer.from(s, "utf16le"));
+}
 
 // ── HWP5 / CFB ───────────────────────────────────────────────────────────────
 
@@ -303,9 +309,12 @@ function decodeParaText(body) {
   return out.normalize("NFC");
 }
 
-// Extract memo text. Returns [{ index, location, text }]. Best-effort: HWP5 memo
-// bodies are the paragraph list nested under each MEMO_LIST record; HWPX memo
-// text is the <hp:t> runs inside each <…:memo> element.
+// Extract memos. Returns [{ index, id, location, text, anchor }] where `text`
+// is the memo's own content and `anchor` is the body text the memo is attached
+// to (empty if not recovered). HWP5: memo text lives in the MEMO_LIST paragraph
+// list (keyed by the memo id = the MEMO_LIST 4-byte value); the anchor is the
+// span between a "%%me" field-begin/end pair in the body, whose CTRL_HEADER
+// carries the same id. HWPX: <hp:t> runs inside each <…:memo> element.
 export function readMemos(path) {
   const buf = readFileSync(path);
   const out = [];
@@ -324,26 +333,102 @@ export function readMemos(path) {
           continue;
         }
       }
-      // Memos are a contiguous run of MEMO_LIST(93) records, each immediately
-      // followed by its own paragraph list (LIST_HEADER, PARA_HEADER, then the
-      // PARA_TEXT carrying the memo text — all at the same record level). Each
-      // MEMO_LIST starts a new memo; collect PARA_TEXT until the next one.
-      let started = false;
+      const recs = [...walkRecords(data)];
+      const firstMemo = recs.findIndex((r) => r.tag === HWPTAG_MEMO_LIST);
+      if (firstMemo < 0) continue;
+
+      // (a) Memo TEXT, keyed by memo id (the MEMO_LIST record's 4-byte value).
+      //     Each MEMO_LIST is followed by its paragraph list; collect the
+      //     PARA_TEXT until the next MEMO_LIST.
+      const text = new Map();
+      let curId = null;
       let parts = [];
-      const push = () => {
-        out.push({ index: out.length, location: name, text: parts.join("\n").trim() });
+      const flushText = () => {
+        if (curId != null) {
+          const joined = parts.join("\n").trim();
+          text.set(curId, text.has(curId) ? `${text.get(curId)}\n${joined}` : joined);
+        }
         parts = [];
       };
-      for (const { tag, body } of walkRecords(data)) {
+      for (const { tag, body } of recs.slice(firstMemo)) {
         if (tag === HWPTAG_MEMO_LIST) {
-          if (started) push();
-          started = true;
-        } else if (started && tag === HWPTAG_PARA_TEXT) {
+          flushText();
+          curId = body.length >= 4 ? body.readUInt32LE(0) : null;
+        } else if (curId != null && tag === HWPTAG_PARA_TEXT) {
           const t = decodeParaText(body);
           if (t) parts.push(t);
         }
       }
-      if (started) push();
+      flushText();
+
+      // (b) ANCHOR — the body span each memo comments on. In the body (before
+      //     the memo block) a "%%me" field-begin (inline char code 3, payload
+      //     starts with the bytes of "%%me") and a field-end (code 4) bracket
+      //     the anchored text; the memo's CTRL_HEADER in between carries the id
+      //     in its last 4 bytes. Pair them up, tolerating either order.
+      const anchor = new Map();
+      const doneSpans = [];
+      let inField = false;
+      let span = "";
+      let openId = null;
+      const isMemoCtrl = (b) => b.length >= 8 && indexOfUtf16(b, "MEMO") >= 0;
+      for (const { tag, body } of recs.slice(0, firstMemo)) {
+        if (tag === HWPTAG_CTRL_HEADER && isMemoCtrl(body)) {
+          const id = body.readUInt32LE(body.length - 4);
+          if (doneSpans.length) anchor.set(id, doneSpans.shift());
+          else openId = id;
+        } else if (tag === HWPTAG_PARA_TEXT) {
+          let j = 0;
+          while (j + 2 <= body.length) {
+            const c = body.readUInt16LE(j);
+            if (
+              c === 3 &&
+              j + 16 <= body.length &&
+              body[j + 2] === 0x65 && body[j + 3] === 0x6d &&
+              body[j + 4] === 0x25 && body[j + 5] === 0x25
+            ) {
+              inField = true;
+              span = "";
+              j += 16;
+              continue;
+            }
+            if (c === 4) {
+              if (inField) {
+                const t = span.normalize("NFC").trim();
+                if (openId != null) {
+                  anchor.set(openId, t);
+                  openId = null;
+                } else {
+                  doneSpans.push(t);
+                }
+                inField = false;
+              }
+              j += 16;
+              continue;
+            }
+            if (INLINE8.has(c)) {
+              j += 16;
+              continue;
+            }
+            if (c < 32) {
+              j += 2;
+              continue;
+            }
+            if (inField) span += String.fromCharCode(c);
+            j += 2;
+          }
+        }
+      }
+
+      for (const id of [...text.keys()].sort((a, b) => a - b)) {
+        out.push({
+          index: out.length,
+          id,
+          location: name,
+          text: text.get(id) || "",
+          anchor: anchor.get(id) || "",
+        });
+      }
     }
     return out;
   }
@@ -358,7 +443,9 @@ export function readMemos(path) {
           .join("")
           .normalize("NFC")
           .trim();
-        out.push({ index: out.length, location: name, text });
+        // HWPX anchor (the run the memo attaches to) is not yet recovered —
+        // kept "" for shape parity with the HWP5 path.
+        out.push({ index: out.length, id: out.length + 1, location: name, text, anchor: "" });
       }
     }
     return out;
