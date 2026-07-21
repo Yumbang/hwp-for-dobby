@@ -10,13 +10,12 @@
 // identically on claude.ai / cowork / code.
 //
 // This is the centerpiece edit. It routes through safeReplaceAll() (lib/
-// safe-edit.mjs), NEVER the engine's replaceAll() directly: on a genuine .hwp
-// the engine's replaceAll mutates the IR but does NOT null section.raw_stream,
-// so the edit is silently dropped on save (spec rule 9). safeReplaceAll instead
-// locates every hit with searchAllText(include_cells=true) and rewrites it with
-// the delete/insert primitives, which DO null raw_stream and therefore survive
-// the round-trip (spec rules 10/11). On .hwpx input the engine's replaceAll is
-// safe (no raw_stream fast-path) so safeReplaceAll uses it directly (rule 24).
+// safe-edit.mjs), which covers body text, table cells and textboxes in a single
+// engine call (spec rule 9). Up to engine 0.7.15 that call was unsafe on a
+// genuine .hwp — it mutated the IR without nulling section.raw_stream, so the
+// edit was silently dropped on save, and safe-edit walked searchAllText +
+// delete/insert instead (rule 11). Upstream fixed it in 0.7.16; the wrapper
+// stays as the one place a regression would be re-routed.
 //
 // Every save goes through exportVerify() — export, reload from disk, and confirm
 // the replacement actually materialized. A `verified: false` result means the
@@ -74,8 +73,7 @@ try {
   fail(EXIT.LOAD, `error: could not load ${input}: ${e?.message ?? e}`);
 }
 
-// safeReplaceAll mutates `doc` in place and returns the match count, dispatching
-// on source format (.hwpx → replaceAll; genuine .hwp → search + delete/insert).
+// safeReplaceAll mutates `doc` in place and returns the match count.
 let count = 0;
 try {
   count = safeReplaceAll(doc, query, replacement, caseSensitive);

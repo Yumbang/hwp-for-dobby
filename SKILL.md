@@ -8,7 +8,7 @@ license: MIT (built on the rhwp engine — github.com/edwardkim/rhwp, MIT)
 
 ## Overview
 
-This skill views, edits, fills, and creates HWP and HWPX documents — the format of Hancom Office and Korean public-sector workflows. It wraps the **rhwp** engine (Rust→WASM, vendored under `vendor/rhwp/`, pinned to **0.7.15**) with small Node.js scripts.
+This skill views, edits, fills, and creates HWP and HWPX documents — the format of Hancom Office and Korean public-sector workflows. It wraps the **rhwp** engine (Rust→WASM, vendored under `vendor/rhwp/`, pinned to **0.7.19**) with small Node.js scripts.
 
 **Read first, edit second, verify third.** Every edit is confirmed by reloading the saved file — the engine has corner cases (documented in `spec/rhwp-behavior.md`) where an in-memory edit can be silently dropped, so "it returned ok" is not proof. The scripts do this verification for you and report `verified: true/false`.
 
@@ -70,7 +70,7 @@ The rhwp WASM bundle ships vendored under `vendor/rhwp/` — no `npm install` ne
 
 ## Editing — the safe path
 
-**Find/replace (`replace.mjs`) is the keystone.** On a genuine `.hwp`, the engine's bulk `replaceAll` silently drops edits on save (it doesn't invalidate the serializer's round-trip cache). `replace.mjs` routes around this automatically: `.hwpx` input → engine `replaceAll` (safe); `.hwp` input → locate every hit with `searchAllText` (body + cells) and rewrite with delete+insert primitives that DO persist. It then reloads and confirms — `verified: true` means the change is really on disk.
+**Find/replace (`replace.mjs`) is the keystone.** It replaces across body text, table cells and textboxes in one pass, then reloads the saved file and confirms — `verified: true` means the change is really on disk, and that check, not the replace itself, is the guarantee. (Historical note for anyone reading older docs: up to engine 0.7.15 bulk replace was silently dropped on a genuine `.hwp` because the serializer's round-trip byte cache wasn't invalidated, and the skill routed around it with a search + delete/insert walk. Fixed upstream in 0.7.16; the workaround is gone.)
 
 Every editing script (`edit_text`, `edit_cell`, `table`, `format`, `header_footer`, `footnote`, `fill_form`, `unlock`, `create`) follows the same contract: edit → atomic `.hwp` save → reload → verify → report `verified`. A `verified: false` result is a **failed task** (exit 5), never reported as success.
 
@@ -102,7 +102,7 @@ Every editing script (`edit_text`, `edit_cell`, `table`, `format`, `header_foote
 | exit `6` editing a file with memos | engine can't model memos — editing their section silently deletes them on save | guard blocks (exit 6); read them with `read.mjs --memos`, or pass `--allow-memo-loss` to edit and lose them |
 | Hancom rejects a filled form | pre-filled field char-shape (#838) | warn was printed; fill empty fields only, or accept the risk and visually verify |
 | merged-cell data looks shifted | table read from flattened text | re-read with `extract_tables.mjs` |
-| `R&D` etc. special chars | (was a ≤0.7.11 bug) | fine on 0.7.15 — `&`/`<`/`>` preserved |
+| `R&D` etc. special chars | (was a ≤0.7.11 bug) | fine on 0.7.19 — `&`/`<`/`>` preserved |
 
 ## Behavioral Guarantee Matrix (summary — full spec in `spec/rhwp-behavior.md`)
 
@@ -114,8 +114,8 @@ Every editing script (`edit_text`, `edit_cell`, `table`, `format`, `header_foote
 | form fill — empty field | WORKS | WORKS |
 | form fill — pre-filled field | WORKS+WARN (#838) | WORKS+WARN |
 | create from scratch | WORKS (→ `.hwp`) | — |
-| `replaceAll` (raw engine) | **FAILS-SILENTLY** — never used directly | WORKS |
+| bulk find/replace (body + cells + textboxes) | WORKS (engine ≥0.7.16) | WORKS |
 | edit a file that has memos | **BLOCKED** (exit 6; memos deleted on save, override `--allow-memo-loss`) | BLOCKED |
 | save as HWPX | **BLOCKED** (Hancom-rejected) | BLOCKED |
 
-Engine pinned to rhwp **0.7.15** (`vendor/rhwp/VERSION`). Known live limitations on this build: `replaceAll`-drop (routed around), form #838 (warned), memos not modeled (editing their section deletes them on save — guarded, exit 6, override `--allow-memo-loss`; read with `read.mjs --memos`), shapes/charts not supported. The full, test-backed rule set is in `spec/rhwp-behavior.md`; `test/` enforces it.
+Engine pinned to rhwp **0.7.19** (`vendor/rhwp/VERSION`). Known live limitations on this build: form #838 (warned), memos not modeled — they ride along only in a section's `raw_stream` round-trip cache, so editing their section deletes them on save (guarded, exit 6, override `--allow-memo-loss`; read with `read.mjs --memos`) — and shapes/charts not supported. The full, test-backed rule set is in `spec/rhwp-behavior.md`; `test/` enforces it.

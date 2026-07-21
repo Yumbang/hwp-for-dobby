@@ -17,12 +17,11 @@
 //   insert-paragraph  → insertParagraph(sec, para)            opens a new empty
 //                       paragraph at index `para` in the section.
 //
-// Why these primitives and not replaceAll: on a genuine .hwp the engine caches
-// the original section bytes (raw_stream) and the serializer emits those
-// verbatim, dropping IR edits — UNLESS the editing call nulled raw_stream.
-// insertText / deleteText / insertParagraph all null it, so they survive the
-// .hwp save→reload round-trip; replaceAll does not (spec rules 9–13). We never
-// touch replaceAll here.
+// Why these primitives rather than a search-and-replace: they are positional.
+// This script edits at coordinates the caller already knows, so there is no
+// query to match and nothing to disambiguate. insertText / deleteText /
+// insertParagraph all null the section's raw_stream cache, so they survive the
+// .hwp save→reload round-trip (spec rules 12–13); exportVerify proves it.
 //
 // CORE-TIER: WASM-only. No rhwp CLI, no capabilities/requireCli. Behaves
 // identically on claude.ai / cowork / code.

@@ -3,10 +3,12 @@
 // rhwp's HWP5 serializer has a "raw_stream fast path": if a section still
 // holds its original parsed bytes, serialize_section() emits those verbatim
 // and IGNORES IR edits (rhwp/src/serializer/body_text.rs). Edits survive
-// only when the editing API nulled section.raw_stream. `replaceAll` does
-// NOT null it, so its edits are silently dropped on .hwp save — in-memory
-// success != on-disk success. The ONLY reliable check is: export, reload
-// from disk, and confirm the change actually materialized.
+// only when the editing API nulled section.raw_stream. Every mutating API is
+// supposed to do that — but `replaceAll` didn't until 0.7.16, and its edits
+// vanished on .hwp save with no error. In-memory success != on-disk success,
+// and no amount of reading the engine's source makes that safe to assume. The
+// ONLY reliable check is: export, reload from disk, and confirm the change
+// actually materialized. That is why this gate is universal and unconditional.
 //
 // Every edit script routes its save through exportVerify(); a `verified:
 // false` result is a FAILED task (exit CORRUPTION=5), never reported as

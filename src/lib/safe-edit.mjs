@@ -1,49 +1,30 @@
-// Safe find/replace — the keystone fix of the whole skill.
+// Find/replace, in one place.
 //
-// The engine's replaceAll() does NOT null section.raw_stream, so on a genuine
-// .hwp its edits are silently dropped on save (spec rule 9). The safe path is
-// to LOCATE every match and rewrite it with the delete+insert primitives,
-// which DO null raw_stream and therefore survive the round-trip (spec rules
-// 10/11). We locate matches with searchAllText(include_cells=true) — the only
-// search API that also covers table cells (plain searchText is body-only) —
-// and rewrite each hit with the matching (cell vs body) delete/insert pair.
+// History, because it explains why this seam exists at all: on engines up to
+// 0.7.15 the HWP5 serializer emitted each section's cached `raw_stream` bytes
+// verbatim, and `replaceAll()` did not null that cache. So on a genuine .hwp a
+// replace reported an in-memory match and was then silently dropped on save —
+// body text AND table cells alike. This module used to route around it by
+// locating every hit with searchAllText and rewriting it with the delete/insert
+// primitives, which do null raw_stream.
 //
-// Source-format dispatch (spec rules 9, 24):
-//   • .hwpx input  → no raw_stream cache → replaceAll() is safe → one call.
-//   • genuine .hwp → searchAllText + delete/insert per hit.
+// Upstream fixed it in 0.7.16 (commit d0e866da / PR #1398, issue #1385:
+// "replaceAll 치환 결과가 exportHwp 직렬화에서 유실 — raw_stream 캐시 무효화").
+// Re-verified empirically on the pinned 0.7.19 before this was simplified: a
+// real 2-section .hwp with 182 matches (99 of them inside table cells) kept all
+// 182 after save→reload, where 0.7.15 lost all 182. See spec rule 9.
 //
-// Mutates `doc` in place. The caller is responsible for exportVerify() — a
-// replace is only "done" once the change is confirmed to survive save→reload.
+// So both formats now take the engine path. The seam stays because it is the
+// single choke point where a future engine regression would be re-routed, and
+// because `replaceAll` covers body, cells and textboxes in one call — wider
+// coverage than the old searchAllText walk had.
+//
+// Mutates `doc` in place. The caller still owns exportVerify() — a replace is
+// only "done" once the change is confirmed to survive save→reload. That gate,
+// not this function, is what guarantees we never ship a silently-dropped edit.
 
-// Rewrite all occurrences of `query` with `replacement`. Returns the match
-// count. Hits are applied in reverse document order so earlier char offsets
-// in the same paragraph/cell are not disturbed by an earlier rewrite.
+// Replace all occurrences of `query` with `replacement`. Returns the match count.
 export function safeReplaceAll(doc, query, replacement, caseSensitive = true) {
   if (!query) return 0;
-
-  // HWPX-sourced docs have no raw_stream fast-path; replaceAll materializes
-  // from the IR and survives. Use it directly — it is the simplest correct
-  // path and also covers cells/textboxes.
-  if (doc.getSourceFormat() === "hwpx") {
-    return JSON.parse(doc.replaceAll(query, replacement, caseSensitive)).count || 0;
-  }
-
-  // genuine .hwp — locate (body + cells) then delete+insert each hit.
-  const hits = JSON.parse(doc.searchAllText(query, caseSensitive, true));
-  // searchAllText returns hits in ascending document order; reversing keeps,
-  // within each location, descending char offset (independent across
-  // locations), so no offset bookkeeping is needed.
-  for (let i = hits.length - 1; i >= 0; i--) {
-    const h = hits[i];
-    if (h.cellContext) {
-      const c = h.cellContext;
-      doc.deleteTextInCell(h.sec, c.parentPara, c.ctrlIdx, c.cellIdx, c.cellPara, h.charOffset, h.length);
-      if (replacement)
-        doc.insertTextInCell(h.sec, c.parentPara, c.ctrlIdx, c.cellIdx, c.cellPara, h.charOffset, replacement);
-    } else {
-      doc.deleteText(h.sec, h.para, h.charOffset, h.length);
-      if (replacement) doc.insertText(h.sec, h.para, h.charOffset, replacement);
-    }
-  }
-  return hits.length;
+  return JSON.parse(doc.replaceAll(query, replacement, caseSensitive)).count || 0;
 }

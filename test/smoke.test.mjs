@@ -1,17 +1,17 @@
 // Engine-behavior smoke / regression baseline for the vendored rhwp build.
 //
 // Purpose: lock down the behaviors the skill DEPENDS ON, so that an engine
-// bump (e.g. 0.7.15 → next) can't silently change them. Two kinds of check:
+// bump (e.g. 0.7.19 → next) can't silently change them:
 //
-//   • GUARANTEES we rely on — these MUST stay true (hard assert):
-//       - a genuine .hwp reads + exposes its tables
-//       - insertTextInCell round-trips (survives save→reload) on a .hwp
-//       - replaceAll round-trips on a .hwpx-SOURCED document
-//
-//   • the KNOWN BUG we route around — replaceAll silently drops edits on a
-//     genuine .hwp (raw_stream fast-path). Asserted as currently-broken so
-//     that if upstream ever fixes it, THIS test flips and tells us we can
-//     simplify lib/verify + the safe-replace routing. See spec/rhwp-behavior.md.
+//   - a genuine .hwp reads + exposes its tables
+//   - insertTextInCell round-trips (survives save→reload) on a .hwp
+//   - replaceAll round-trips on a .hwpx-SOURCED document
+//   - replaceAll round-trips on a genuine .hwp too (raw_stream cache is
+//     invalidated). This last one was asserted INVERTED up to engine 0.7.15,
+//     as a watchdog on a known upstream bug; 0.7.16 fixed it (spec rule 9) and
+//     the assertion flipped, which is exactly what it was there to tell us.
+//     If it ever goes red again, restore the delete/insert routing in
+//     lib/safe-edit.mjs. See spec/rhwp-behavior.md.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -88,18 +88,22 @@ test("GUARANTEE: replaceAll round-trips on an HWPX-sourced document", async () =
   );
 });
 
-test("KNOWN BUG (baseline): replaceAll is silently DROPPED on a genuine .hwp", async () => {
+test("replaceAll survives save→reload on a genuine .hwp (raw_stream fix, ≥0.7.16)", async () => {
+  // Was the skill's defining bug up to 0.7.15: the .hwp raw_stream cache was
+  // emitted verbatim, so a replace reported an in-memory match and vanished on
+  // save. Fixed upstream in 0.7.16 (d0e866da / #1385). If this ever goes red
+  // again the engine regressed — restore the delete/insert routing in
+  // lib/safe-edit.mjs before shipping (spec rule 9).
   const doc = await loadDocument(HWP);
   const reported = JSON.parse(doc.replaceAll("△1,802", "SMOKEDROP", true)).count;
   assert.ok(reported > 0, "engine should report an in-memory match");
-  // Export + reload and check the replacement did NOT survive.
   const r = await exportVerify(doc, out("drop.hwp"), {
     expectPresent: ["SMOKEDROP"],
   });
   assert.equal(
     r.verified,
-    false,
-    "REGRESSION/GOOD-NEWS: replaceAll now survives on .hwp — the upstream raw_stream " +
-      "bug appears fixed. Revisit lib/verify + safe-replace routing and update spec.",
+    true,
+    "REGRESSION: replaceAll is being dropped on .hwp again — the raw_stream cache " +
+      "is no longer invalidated. Re-introduce the searchAllText + delete/insert path.",
   );
 });

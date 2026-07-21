@@ -20,12 +20,12 @@ Output is **always `.hwp`**, never `.hwpx` (Hancom Office rejects rhwp-produced 
 
 ## Key documents
 
-- **`spec/rhwp-behavior.md`** — the keystone: every empirically-verified engine behavior (pinned to rhwp 0.7.15), each mapped to a test in `test/spec/`. Read this before touching parse/edit logic.
+- **`spec/rhwp-behavior.md`** — the keystone: every empirically-verified engine behavior (pinned to rhwp 0.7.19), each mapped to a test in `test/spec/`. Read this before touching parse/edit logic.
 - **Plan** — `~/.claude/plans/sequential-enchanting-puffin.md` (re-architecture plan & phases).
 
 ## Engine version
 
-Pinned to rhwp **0.7.15** (`vendor/rhwp/VERSION`, exact-pinned in `package.json`). `test/pin-integrity.test.mjs` fails if the vendored WASM, `package.json`, `package-lock.json`, and the WASM's own `version()` ever disagree.
+Pinned to rhwp **0.7.19** (`vendor/rhwp/VERSION`, exact-pinned in `package.json`). `test/pin-integrity.test.mjs` fails if the vendored WASM, `package.json`, `package-lock.json`, and the WASM's own `version()` ever disagree.
 
 ## Tests
 
@@ -33,7 +33,7 @@ Pinned to rhwp **0.7.15** (`vendor/rhwp/VERSION`, exact-pinned in `package.json`
 npm test          # pin-integrity + smoke + spec(coming) + skill-doc(coming)
 ```
 
-`test/smoke.test.mjs` locks the behaviors the skill depends on (e.g. `insertTextInCell` survives a `.hwp` round-trip) AND the known bug it routes around (`replaceAll` is silently dropped on a genuine `.hwp` — use the safe insert/delete path instead).
+`test/smoke.test.mjs` locks the behaviors the skill depends on — `insertTextInCell` survives a `.hwp` round-trip, bulk replace reaches disk on both formats. That last one used to assert the opposite: up to engine 0.7.15 `replaceAll` was silently dropped on a genuine `.hwp` and the skill walked search + delete/insert instead. Upstream fixed it in 0.7.16, so the test now guards the fix and goes red if the engine regresses.
 
 ## Status
 

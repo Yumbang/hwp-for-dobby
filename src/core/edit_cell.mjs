@@ -19,10 +19,10 @@
 // a covered (merged-away) position, we fail with NOT_FOUND and a hint that it
 // belongs to a merge origin elsewhere.
 //
-// Why the cell-edit primitives (not replaceAll): on a genuine .hwp, replaceAll
-// silently drops edits because it doesn't null section.raw_stream (spec rule
-// 9). insertTextInCell / deleteTextInCell DO null it, so cell edits survive
-// the save→reload round-trip (spec rule 14). exportVerify confirms that.
+// Why the cell-edit primitives rather than a search-and-replace: they address a
+// cell directly, so an edit lands in the cell you named even when the same text
+// appears elsewhere. They null section.raw_stream, so cell edits survive the
+// save→reload round-trip (spec rule 14). exportVerify confirms that.
 //
 // Bounds: the engine THROWS (surfaces as undefined → JSON.parse failure, a
 // Rust panic) when cell_idx >= cellCount, and the boundary is cellCount, NOT
