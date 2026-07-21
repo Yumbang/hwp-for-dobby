@@ -58,14 +58,15 @@ test("retains the form pre-fill corruption warning (#838)", () => {
   );
 });
 
-test("retains the raw replaceAll find/replace silent-drop hazard", () => {
+// Until 0.7.15 this test guarded the raw `replaceAll` silent-drop hazard. That
+// bug was fixed upstream in 0.7.16 (spec rule 9) and the disclosure was retired
+// with it — a doc must not warn about a hazard that no longer exists. What is
+// still live is the mechanism underneath it: the .hwp round-trip cache, which is
+// the only reason memos survive at all and therefore why editing kills them.
+test("retains the .hwp round-trip cache disclosure (why memos die on edit)", () => {
   assert.ok(
-    contains("replaceAll"),
-    "LOST DISCLOSURE: 'replaceAll' is no longer named — the central reason replace.mjs exists (raw bulk replace on .hwp) is undocumented.",
-  );
-  assert.ok(
-    containsAny("FAILS-SILENTLY", "silently drop", "drop"),
-    "LOST DISCLOSURE: the silent-drop nature of raw replaceAll is gone — without it 'replaceAll' reads as safe-to-use, which corrupts .hwp edits.",
+    containsAny("raw_stream", "round-trip cache", "serializer cache"),
+    "LOST DISCLOSURE: the .hwp round-trip byte cache is no longer named — it's the mechanism behind memo loss and behind any future silent-drop regression.",
   );
 });
 
@@ -98,10 +99,10 @@ test("retains the .hwpx output policy (input ok, output blocked)", () => {
   );
 });
 
-test("retains the pinned engine version 0.7.15", () => {
+test("retains the pinned engine version 0.7.19", () => {
   assert.ok(
-    contains("0.7.15"),
-    "LOST DISCLOSURE: the pinned engine version '0.7.15' is gone — the behavioral guarantees in this doc are no longer tied to a known engine build.",
+    contains("0.7.19"),
+    "LOST DISCLOSURE: the pinned engine version '0.7.19' is gone — the behavioral guarantees in this doc are no longer tied to a known engine build.",
   );
 });
 

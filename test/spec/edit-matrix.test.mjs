@@ -12,10 +12,11 @@
 // This file asserts that guarantee at two levels:
 //
 //   1. UNIT (lib/safe-edit + lib/verify, no subprocess) — the keystone
-//      find/replace path. We prove BOTH halves of the design's justification:
+//      find/replace path:
 //        • safeReplaceAll body+cell on a genuine .hwp → verified=true
-//        • the engine's raw replaceAll on the SAME .hwp → verified=FALSE
-//          (the silent-drop contrast that justifies safe-edit's existence)
+//        • the engine's raw replaceAll on the SAME .hwp → verified=true, the
+//          property safe-edit's one-line delegation now rests on (spec rule 9;
+//          this assertion was inverted up to engine 0.7.15)
 //        • safeReplaceAll on a .hwpx-sourced doc → verified=true
 //
 //   2. END-TO-END (spawn each src/core editing script, cwd=repo root) — every
@@ -137,26 +138,26 @@ test("unit safe-edit: BODY replace on genuine .hwp survives round-trip (verified
   record("safe-edit body", "hwp", r.verified);
 });
 
-test("unit safe-edit CONTRAST: engine raw replaceAll on the SAME .hwp does NOT survive (verified=false)", async () => {
-  // This is the contrast that justifies safe-edit's existence: the engine's
-  // own replaceAll reports an in-memory match but the .hwp raw_stream fast-path
-  // drops it on save. If this ever flips to true, upstream fixed the bug and
-  // the whole safe-edit indirection can be reconsidered (spec rule 9).
+test("unit: engine raw replaceAll on a genuine .hwp survives save→reload (≥0.7.16)", async () => {
+  // safeReplaceAll now delegates straight to the engine, so this asserts the
+  // property that delegation depends on: the .hwp raw_stream cache is nulled by
+  // replaceAll, and the edit reaches disk. Up to 0.7.15 this was false and the
+  // skill routed around it with searchAllText + delete/insert (spec rule 9).
   const doc = await loadDocument(HWP);
   const reported = JSON.parse(
-    doc.replaceAll("관리대상수지", "RAW_REPLACEALL_DROPPED", true),
+    doc.replaceAll("관리대상수지", "RAW_REPLACEALL_SURVIVES", true),
   ).count;
   assert.ok(reported > 0, "engine must report an in-memory match for the body text");
   const r = await exportVerify(doc, out("unit-rawdrop.hwp"), {
-    expectPresent: ["RAW_REPLACEALL_DROPPED"],
+    expectPresent: ["RAW_REPLACEALL_SURVIVES"],
   });
   assert.equal(
     r.verified,
-    false,
-    "REGRESSION/GOOD-NEWS if this fails: engine replaceAll now survives on .hwp — " +
-      "the raw_stream silent-drop bug appears fixed; revisit safe-edit + verify routing.",
+    true,
+    "REGRESSION: engine replaceAll is dropping edits on .hwp again — restore the " +
+      "delete/insert routing in lib/safe-edit.mjs.",
   );
-  record("raw replaceAll (contrast)", "hwp", r.verified);
+  record("raw replaceAll", "hwp", r.verified);
 });
 
 test("unit safe-edit: CELL replace on genuine .hwp survives round-trip (verified=true)", async () => {

@@ -16,6 +16,6 @@
     "bump": "node scripts/bump.mjs"
   },
   "dependencies": {
-    "@rhwp/core": "0.7.15"
+    "@rhwp/core": "0.7.19"
   }
 }

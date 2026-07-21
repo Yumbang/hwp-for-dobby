@@ -13,7 +13,7 @@ Notes for editing this skill. It wraps the rhwp engine (Rust→WASM, vendored, M
 ## Rules that bite if you ignore them
 
 1. Every edit goes through `exportVerify`. The engine will accept an edit in memory and then drop it silently on save, so nothing's done until you reload and confirm. `verified: false` is a failure (exit 5), not a success.
-2. Never call the engine's `replaceAll` on a `.hwp` — that's the silent-drop trap. Use `safeReplaceAll` (`lib/safe-edit`). On `.hwpx` input `replaceAll` is fine.
+2. Go through `safeReplaceAll` (`lib/safe-edit`) rather than calling the engine's `replaceAll` from a script. It's a one-line delegation now that 0.7.16 fixed the raw_stream silent-drop, but it's the choke point where a regression gets re-routed — and two tests watch that property, so you'd find out.
 3. Output is always `.hwp`. Hancom rejects our HWPX; `assertHwpOutput` enforces it.
 4. Memos (메모/주석) aren't modeled by the engine — they ride along only in a section's `raw_stream`, so any edit to that section deletes them on save with no error. Every write script must call `assertMemoSafe` (`lib/memo`) before editing: it blocks by default (exit 6) and only proceeds with `--allow-memo-loss`. Never silently let an edit drop memos.
 5. Every rule in `spec/rhwp-behavior.md` has a matching test in `test/spec/`. Learn something new about the engine, write the rule and the test. If the doc and the engine disagree, the engine wins.
@@ -21,7 +21,7 @@ Notes for editing this skill. It wraps the rhwp engine (Rust→WASM, vendored, M
 
 ## Engine version
 
-Pinned in `vendor/rhwp/VERSION` (0.7.15), vendored from npm `@rhwp/core`. `test/pin-integrity` fails if the WASM, `package.json`, the lockfile and VERSION ever drift apart. To move versions, run `npm run bump <version>` — it re-vendors and refuses the bump unless the whole suite stays green. Don't hand-edit the vendored files.
+Pinned in `vendor/rhwp/VERSION` (0.7.19), vendored from npm `@rhwp/core`. `test/pin-integrity` fails if the WASM, `package.json`, the lockfile and VERSION ever drift apart. To move versions, run `npm run bump <version>` — it re-vendors and refuses the bump unless the whole suite stays green. Don't hand-edit the vendored files.
 
 ## Adding a script
 

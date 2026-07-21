@@ -4,8 +4,9 @@
 
 ## 버전 고정 (Version Pin)
 
-- **대상 엔진:** rhwp `@rhwp/core` **0.7.15** (vendored: `hwp/vendor/rhwp/VERSION` = `0.7.15`).
-- 0.7.10~0.7.11 시절 문서의 버전 민감 주장(예: HWPX XML 엔티티 드롭)은 **이 버전에서 재검증**되어 정정되었습니다. 본 명세는 0.7.15에서 경험적으로 확인된 동작만 기술합니다.
+- **대상 엔진:** rhwp `@rhwp/core` **0.7.19** (vendored: `hwp/vendor/rhwp/VERSION` = `0.7.19`).
+- 0.7.10~0.7.11 시절 문서의 버전 민감 주장(예: HWPX XML 엔티티 드롭)은 **이 버전에서 재검증**되어 정정되었습니다. 본 명세는 0.7.19에서 경험적으로 확인된 동작만 기술합니다.
+- **0.7.15 → 0.7.19 (2026-07-21).** 가장 큰 변화는 규칙 9의 반전이다: `replaceAll` raw_stream 드롭이 0.7.16에서 업스트림 수정되었다(`d0e866da` / PR #1398 / issue #1385). 규칙 11의 우회 경로(`searchAllText` + delete/insert)는 더 이상 필요하지 않아 `lib/safe-edit.mjs`에서 제거되었다. 나머지 규칙은 0.7.19에서 전량 재실행되어 green.
 - 검증 도구:
   - 캐노니컬 로더: `hwp/src/lib/_bootstrap.mjs` — `loadDocument(path)`, `emptyDocument()`(Promise — `await` 필요), `version()`, `atomicWriteFile`, `assertHwpOutput`.
   - 검증 헬퍼: `hwp/src/lib/verify.mjs` — `exportVerify(doc, outPath, {expectPresent,expectAbsent})`, `probeTextCount(doc, q, caseSensitive)`.
@@ -14,7 +15,7 @@
 
 ## 검증 등급 (Verdict legend)
 
-- **CONFIRMED** — 0.7.15에서 스크립트 프로브로 직접 재현됨.
+- **CONFIRMED** — 0.7.19에서 스크립트 프로브로 직접 재현됨.
 - **CONFIRMED (source/CHANGELOG)** — 소스/CHANGELOG로 확인(런타임 프로브 불가하거나 불필요).
 - **UNTESTABLE-BLACKBOX** — WASM API로 노출되지 않아 런타임 단정 불가; 에이전트측 로직 또는 소스 추론.
 - **SPEC-FIRST** — 아직 스킬에 구현되지 않은 동작을 규정(테스트가 요구 사양을 정의). 기존 동작 기술이 아님.
@@ -36,13 +37,18 @@
 
 ## 2. Editing / Round-trip (편집 및 저장 왕복)
 
-> **핵심 원리(raw_stream 캐시 버그).** 진짜 .hwp는 원본 `section.raw_stream` 바이트를 캐시한다. 직렬화기는 캐시된 raw_stream이 있으면 **IR 변경을 무시하고 캐시 바이트를 그대로 방출**한다. 따라서 **`raw_stream`을 null로 비우는 API만** .hwp 왕복에서 안전하다. HWPX 입력은 raw_stream이 없어 모든 편집이 IR에서 재구성된다.
+> **핵심 원리(raw_stream 캐시).** 진짜 .hwp는 원본 `section.raw_stream` 바이트를 캐시한다. 직렬화기는 캐시된 raw_stream이 있으면 **IR 변경을 무시하고 캐시 바이트를 그대로 방출**한다. 따라서 **`raw_stream`을 null로 비우는 API만** .hwp 왕복에서 안전하다. HWPX 입력은 raw_stream이 없어 모든 편집이 IR에서 재구성된다.
 >
-> **검증 메커니즘 주의:** `verify.mjs`의 `probeTextCount`는 `replaceAll(q, q)`(자기 자신으로 치환하는 no-op)의 **match COUNT만** 사용한다 — 내용이 바뀌지 않으므로 raw_stream 드롭과 무관하게 카운트가 정확하며, 본문+셀+텍스트박스 **전체 문서**를 커버한다(`searchText`는 본문만). 모든 왕복 단정은 이 카운트에 의존한다. 즉 `probeTextCount`로 "있다/없다"를 보는 것은 안전하나, 이것이 `replaceAll`로 **내용을 바꾸는 것**이 .hwp에서 동작한다는 뜻은 **아니다**(규칙 9).
+> 이 캐시 자체는 (성능을 위한) 정상 설계이며, 0.7.16부터는 `replaceAll`을 포함한 **모든 변형 API가 캐시를 무효화**한다(규칙 9). 문제가 되는 것은 캐시를 비우지 않고 IR만 고치는 경로이며, 엔진이 모델링하지 않는 **메모는 여전히 이 캐시로만 살아남는다**(§2a) — 그래서 메모 있는 섹션을 편집하면 메모가 사라진다.
+>
+> **검증 메커니즘 주의:** `verify.mjs`의 `probeTextCount`는 `replaceAll(q, q)`(자기 자신으로 치환하는 no-op)의 **match COUNT만** 사용한다 — 본문+셀+텍스트박스 **전체 문서**를 커버한다(`searchText`는 본문만). 모든 왕복 단정은 이 카운트에 의존한다.
 
-9. **`replaceAll()`은 진짜 .hwp에서 안전하지 않다 — 조용히 드롭된다.** `replaceAll(query, replacement, caseSensitive)`는 IR을 변경하지만 `section.raw_stream`을 null로 비우지 **않아**, 저장 시 편집이 **에러 없이 사라진다(FAILS-SILENTLY)**. **본문·셀 동일하게 영향**. 스킬은 진짜 .hwp에서 `replaceAll`을 **쓰면 안 된다**. — **CONFIRMED (0.7.15에서도 미수정).** `test:` `fixture-table.hwp`에 `replaceAll('△','REPLACED_HWP',true)` → in-memory count=31, export→reload 후 `'△'` 여전히 31, `'REPLACED_HWP'` 0 단정.
+9. **`replaceAll()`은 진짜 .hwp에서도 안전하다 (0.7.16+).** `replaceAll(query, replacement, caseSensitive)`는 이제 `section.raw_stream` 캐시를 null로 비우므로 저장 시 편집이 **생존한다**. 본문·셀·글상자를 한 번의 호출로 커버한다. — **CONFIRMED (0.7.19 프로브).**
+   > **0.7.15까지는 정반대였다.** raw_stream이 무효화되지 않아 `replaceAll` 편집이 **에러 없이 사라졌고**(FAILS-SILENTLY, 본문·셀 동일), 스킬은 규칙 11의 `searchAllText` + delete/insert 경로로 우회했다. 업스트림 수정: `d0e866da` (PR #1398, issue #1385), 0.7.16 릴리스 포함.
+   > **재검증 근거:** 실문서(2섹션, 매치 182건 중 99건이 셀 내부)에서 0.7.15는 182건 **전량 유실**, 0.7.19는 182건 **전량 생존**. 합성 픽스처(`fixture-table.hwp`) 본문·셀 각각 6/6 생존.
+   > `test:` `fixture-table.hwp`에 `replaceAll` 후 export→reload에서 치환 문자열이 존재하고 원본이 사라졌음을 단정(`test/smoke.test.mjs`, `test/spec/edit-matrix.test.mjs`). **이 테스트가 빨개지면 엔진이 회귀한 것** — 규칙 11의 우회 경로를 복원할 것.
 10. **`replaceText()`(위치 기반)는 안전하다.** `replaceText(section, para, char_offset, length, new_text)`는 검색이 아닌 **위치 기반 치환**이며 raw_stream을 null로 비워 **.hwp 왕복 생존**. `replaceAll`과 다르다. — **CONFIRMED.** `test:` `searchText('△')`로 위치 찾고 `replaceText(0,23,3,1,'REPLACED_POS')` → reload 시 치환 텍스트 count=1 단정.
-11. **안전 편집 경로(safe path) = 검색 후 insert/delete.** .hwp 찾기/바꾸기는 **(1) `searchText` 순회로 위치 수집(역순) → (2) `deleteText`/`deleteTextInCell`로 제거 → (3) `insertText`/`insertTextInCell`로 삽입**. `insertText`/`deleteText` 계열은 raw_stream을 null로 비워 편집이 생존한다. `replaceAll`은 절대 쓰지 않는다(HWPX 입력 제외, 규칙 26). — **CONFIRMED.** `test:` 검색→삭제→삽입 시퀀스가 reload에서 일관됨을 단정.
+11. **검색 후 insert/delete 경로도 여전히 유효하다 (regression fallback).** **(1) `searchText`/`searchAllText` 순회로 위치 수집(역순) → (2) `deleteText`/`deleteTextInCell`로 제거 → (3) `insertText`/`insertTextInCell`로 삽입.** `insertText`/`deleteText` 계열은 raw_stream을 null로 비워 편집이 생존한다. 0.7.15까지는 이것이 .hwp 찾기/바꾸기의 **유일한** 안전 경로였고 `lib/safe-edit.mjs`가 이 시퀀스를 구현했다. 규칙 9가 수정된 지금은 `replaceAll` 한 줄로 대체되었으나, **엔진이 회귀하면 되돌아올 경로**이므로 명세에 남긴다. — **CONFIRMED.** `test:` 검색→삭제→삽입 시퀀스가 reload에서 일관됨을 단정.
 12. **`insertText`(본문)는 .hwp와 .hwpx 입력 모두에서 생존.** `insertText(section, para, char_offset, text)` 반환 `{ok:true, charOffset:N}`. — **CONFIRMED.** `test:` .hwp/.hwpx 각각 삽입 후 reload count=1 단정.
 13. **`deleteText`(본문)는 .hwp에서 생존.** `deleteText(section, para, char_offset, count)`는 offset에서 정확히 `count`자 삭제, raw_stream null. — **CONFIRMED.** `test:` 삽입 후 `deleteText`로 제거 → reload count=0 단정.
 14. **`insertTextInCell`은 .hwp와 .hwpx 입력 모두에서 생존.** 시그니처 `insertTextInCell(section, parent_para, control_idx, cell_idx, cell_para_idx, char_offset, text)`. (.hwp 픽스처 표 = `(0,4,0)`; .hwpx = `(0,0,2)` — 위치는 다르나 둘 다 동작.) `deleteTextInCell`도 동일하게 생존. — **CONFIRMED.** `test:` 두 입력에서 셀 삽입 후 reload count=1, 삭제 후 count=0 단정.
@@ -69,7 +75,7 @@
 
 ## 4. Parsing / Environment (파싱 및 환경)
 
-20. **HWPX XML 엔티티 보존(0.7.15에서 정상).** `&amp;`/`&lt;`/`&gt;`는 로드 시 리터럴 `&`/`<`/`>`로 정확히 디코드된다. **0.7.15에서 특수 처리 불필요.** (구 스킬 문서는 0.7.10~0.7.11 드롭→0.7.12 수정이라 기록하나, vendored CHANGELOG에 0.7.11~0.7.15 항목이 없어 그 버전 연혁은 **확인 불가**; 0.7.15 정상은 경험적으로 확인됨.) — **CONFIRMED (0.7.15 probe).** `test:` `R&D` 등 `&`/`<`/`>` 포함 텍스트 왕복 후 `getTextRange`가 동일 문자를 반환함을 단정.
+20. **HWPX XML 엔티티 보존(0.7.15에서 정상).** `&amp;`/`&lt;`/`&gt;`는 로드 시 리터럴 `&`/`<`/`>`로 정확히 디코드된다. **0.7.19에서 특수 처리 불필요.** (구 스킬 문서는 0.7.10~0.7.11 드롭→0.7.12 수정이라 기록하나, 그 버전 연혁은 **확인 불가**; 0.7.15·0.7.19 정상은 경험적으로 확인됨.) — **CONFIRMED (0.7.15 probe).** `test:` `R&D` 등 `&`/`<`/`>` 포함 텍스트 왕복 후 `getTextRange`가 동일 문자를 반환함을 단정.
 21. **macOS NFD vs 코드 NFC 정규화.** 한글은 NFD(분해)와 NFC(결합) 길이가 다르다(`'한글'.normalize('NFC').length=2` vs `'한글'.normalize('NFD').length=6`). 한글 glob 패턴은 매칭이 어긋날 수 있으므로 **디렉터리 스캔 + `normalize('NFC')`** 비교를 쓰고, CLI는 한글 glob이 아닌 **명시적 파일 경로**를 받는다. — **CONFIRMED.** `test:` NFC/NFD 길이 차이 + 정규화 후 매칭 단위 테스트.
 22. **PUA 글리프(U+E000–F8FF)는 보존되나 tofu 렌더.** PUA 코드포인트는 IR/직렬화에서 **무손실 보존**(`insertText`/`getTextRange` 왕복)되지만, 표준 폰트에 글리프가 없어 **두부(tofu) 박스**로 렌더된다. 추출 시 특별 처리 불필요; 시각 출력은 신뢰하지 말 것. — **CONFIRMED.** `test:` `'Test'+U+E000+'PUA'` 왕복 후 PUA 문자 보존 단정.
 
@@ -92,8 +98,8 @@
 |---|---|---|
 | **read tables** (주소 기반 그리드) | WORKS | WORKS |
 | **body text edit** (`insertText`/`deleteText`) | WORKS | WORKS |
-| **find/replace — `replaceAll`** | **FAILS-SILENTLY** (verified=false; 편집 조용히 드롭) | WORKS (raw_stream 없음) |
-| **find/replace — `replaceText`(위치) / safe path** | WORKS | WORKS |
+| **find/replace — `replaceAll`** (본문+셀+글상자) | WORKS (0.7.16+; ≤0.7.15는 FAILS-SILENTLY) | WORKS |
+| **find/replace — `replaceText`(위치) / search+insert/delete** | WORKS | WORKS |
 | **in-cell edit** (`insertTextInCell`/`deleteTextInCell`) | WORKS | WORKS |
 | **in-cell edit — OOB cell (`cell_idx≥cellCount`)** | **HANCOM-REJECTED** (throw → undefined 반환, 하드 실패) | HANCOM-REJECTED *(미검증, .hwp 거동으로 추정)* |
 | **edit a memo-bearing section** (메모 보유 문서 편집) | **BLOCKED-DATA-LOSS** (메모 미모델링 → 저장 시 조용히 삭제; `assertMemoSafe`가 exit `UNSAFE(6)`로 차단, `--allow-memo-loss`로만 우회) | BLOCKED-DATA-LOSS |
@@ -110,17 +116,19 @@
 
 ## Version-compat Matrix (알려진 버그 × 버전)
 
-> ⚠️ vendored CHANGELOG는 **`[0.7.10]`까지만** 존재한다(0.7.11~0.7.15 항목 없음). 따라서 0.7.12/0.7.13 열은 **추론(inferred)** 이며 CHANGELOG로 검증되지 않는다. 0.7.15 열만 경험적으로 확인됨.
+> ⚠️ 0.7.12/0.7.13 열은 **추론(inferred)** 이다. 0.7.15와 0.7.19 열은 경험적으로 확인됨. 업스트림 CHANGELOG는 0.7.19 태그 기준으로 0.7.16~0.7.19 항목을 포함한다.
 
-| 버그 / 가드 | 0.7.10 (CHANGELOG) | 0.7.12 *(inferred)* | 0.7.13 *(inferred)* | 0.7.15 (vendored, 확인) |
-|---|---|---|---|---|
-| **replaceAll-drop** (.hwp raw_stream 미null) | present | present | present | **present** (미수정 — `insertText`/`deleteText` 우회) |
-| **HWPX entity-drop** (`&`/`<`/`>`) | present¹ | fixed | fixed | **fixed** (특수 처리 불필요) |
-| **form #838** (사전 채움 char-shape 비보존) | present | present | present | **present** (workaround: 빈 필드만 채움) |
-| **cell-padding clamp** (`pad_top+pad_bottom>height`) | **guarded**² | guarded | guarded | **guarded** (엔진 자동 50% 비례 축소) |
+| 버그 / 가드 | 0.7.10 (CHANGELOG) | 0.7.12 *(inferred)* | 0.7.13 *(inferred)* | 0.7.15 (확인) | 0.7.19 (vendored, 확인) |
+|---|---|---|---|---|---|
+| **replaceAll-drop** (.hwp raw_stream 미null) | present | present | present | present | **fixed**³ (0.7.16 `d0e866da`/#1385) |
+| **HWPX entity-drop** (`&`/`<`/`>`) | present¹ | fixed | fixed | fixed | **fixed** (특수 처리 불필요) |
+| **form #838** (사전 채움 char-shape 비보존) | present | present | present | present | **미재검증** — 경고 유지 |
+| **cell-padding clamp** (`pad_top+pad_bottom>height`) | **guarded**² | guarded | guarded | guarded | **guarded** (엔진 자동 50% 비례 축소) |
+| **메모(메모 어노테이션) 미모델링** | present | present | present | present | **present** — 0.7.19 API에도 메모 함수 없음. `lib/memo.mjs` + exit 6 가드 유지 |
 
-> ¹ `HWPX entity-drop`: 0.7.15에서 **정상(fixed)** 임은 경험적으로 확인됨. 0.7.10~0.7.11 회귀 / 0.7.12 안정 수정의 버전 연혁은 구 스킬 문서의 주장이며 vendored CHANGELOG로는 **확인 불가**(원 엔티티 복원은 PR #400, `[0.7.8]`).
+> ¹ `HWPX entity-drop`: 0.7.15·0.7.19에서 **정상(fixed)** 임은 경험적으로 확인됨. 0.7.10~0.7.11 회귀 / 0.7.12 안정 수정의 버전 연혁은 구 스킬 문서의 주장이며 vendored CHANGELOG로는 **확인 불가**(원 엔티티 복원은 PR #400, `[0.7.8]`).
 > ² `cell-padding clamp` 가드는 Task #501(`[0.7.9]` 릴리스 / v0.7.8 후속 사이클)에서 도입되어 **0.7.10에 이미 적용**되어 있다.
+> ³ `replaceAll-drop` 수정은 changelog 신뢰가 아니라 **직접 재현**으로 확정했다: 동일 스크립트를 0.7.15/0.7.19 두 벤치에 돌려 실문서 182건이 각각 전량 유실 / 전량 생존함을 확인(규칙 9).
 
 ---
 
@@ -137,9 +145,9 @@
 | #5 | 마커/라벨 폼 | 5 (SPEC-FIRST) | #16 | NFD/NFC 파일명 | 21 |
 | #6 | U+2007 전각공백 | 7 | #17 | PUA tofu | 22 |
 | #7 | cellCount=원점만 | 2 | #18 | getPageTextLayout 근사 | 8 |
-| #8 | replaceAll 드롭 | 9 | #19 | control_mask 가드 | 27 (non-asserting) |
-| #9 | 안전 경로 insert/delete | 10–15 | #20 | cell-padding clamp | 26 |
+| #8 | replaceAll 왕복 생존 | 9 | #19 | control_mask 가드 | 27 (non-asserting) |
+| #9 | 위치 기반 insert/delete | 10–15 | #20 | cell-padding clamp | 26 |
 | #10 | OOB 셀 throw | 15 | #21 | HWPX 출력 거부 | 23 |
 | #11 | header/footer apply_to | 28 | #22 | 메모 미모델링/조용한 삭제 | 29 |
 
-**관련 파일(절대 경로):** `/Users/ybang_mac/Development/side-projects/rhwp-cli/hwp/src/lib/_bootstrap.mjs`, `.../hwp/src/lib/verify.mjs`, `.../hwp/src/lib/memo.mjs` (메모 탐지/읽기/가드), `.../hwp/vendor/rhwp/rhwp.d.ts`, `.../hwp/vendor/rhwp/VERSION` (= `0.7.15`).
+**관련 파일(절대 경로):** `/Users/ybang_mac/Development/side-projects/rhwp-cli/hwp/src/lib/_bootstrap.mjs`, `.../hwp/src/lib/verify.mjs`, `.../hwp/src/lib/memo.mjs` (메모 탐지/읽기/가드), `.../hwp/vendor/rhwp/rhwp.d.ts`, `.../hwp/vendor/rhwp/VERSION` (= `0.7.19`).
