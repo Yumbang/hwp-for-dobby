@@ -157,7 +157,8 @@ export function documentHasTable(doc) {
 
 // Output-format policy: the skill always emits .hwp, never .hwpx.
 // Native HWPX save is unsupported — Hancom Office rejects rhwp-produced
-// .hwpx files as manipulated ("파일 손상"); upstream, unfixed as of v0.7.15.
+// .hwpx files as manipulated ("파일 손상"); upstream, unfixed as of the pinned
+// v0.7.19.
 // .hwpx INPUT is fine: exportHwp() runs the engine's HWPX→HWP adapter for
 // HWPX-sourced docs. Every script calls this on its --output argument
 // before doing any work, so a bad extension fails fast instead of after

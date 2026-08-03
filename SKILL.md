@@ -95,7 +95,7 @@ Every editing script (`edit_text`, `edit_cell`, `table`, `format`, `header_foote
 
 | Symptom | Cause | What to do |
 |---|---|---|
-| `verified: false` after an edit | engine dropped the edit on save | report honestly; for `.hwp` find/replace this should not happen (we route around it) — if it does, the input may be unusual |
+| `verified: false` after an edit | engine dropped the edit on save | report honestly; on the pinned 0.7.19 a `.hwp` find/replace survives the round-trip, so this means either an unusual input or an engine regression (spec rule 9) |
 | exit `4` from an enhanced script | no `rhwp` CLI (not on Claude Code) | use a core script; tell the user PNG/PDF/precise-read need Claude Code + the binary |
 | exit `2` on `--output x.hwpx` | HWPX output is blocked | save as `.hwp` |
 | exit `5` on form fill | filled value didn't survive | the field/doc is problematic; surface it |

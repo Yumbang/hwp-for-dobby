@@ -1,24 +1,26 @@
 # rhwp-behavior.md — `hwp` 스킬 동작 명세 (Behavioral Spec)
 
-> **KEYSTONE 문서.** 이 파일은 `hwp` Claude 스킬이 감싸는 rhwp 엔진(`@rhwp/core`)의 **실제 동작**에 대한 단일 진실 공급원(single source of truth)입니다. 각 규칙은 `hwp/test/spec/` 아래 테스트 하나로 매핑됩니다(끝의 Catalog→Rule 추적표 참조). 스킬은 어떤 경우에도 사용자 문서를 **조용히 손상시켜서는 안 됩니다(MUST NOT silently corrupt)** — 그래서 "조용한 실패(silently dropped)" 케이스는 전부 여기에 명시되고 테스트로 고정됩니다.
+> **KEYSTONE 문서.** 이 파일은 `hwp` Claude 스킬이 감싸는 rhwp 엔진(`@rhwp/core`)의 **실제 동작**에 대한 단일 진실 공급원(single source of truth)입니다. 각 규칙은 `test/spec/` 아래 테스트 하나로 매핑됩니다(끝의 Catalog→Rule 추적표 참조). 스킬은 어떤 경우에도 사용자 문서를 **조용히 손상시켜서는 안 됩니다(MUST NOT silently corrupt)** — 그래서 "조용한 실패(silently dropped)" 케이스는 전부 여기에 명시되고 테스트로 고정됩니다.
 
 ## 버전 고정 (Version Pin)
 
-- **대상 엔진:** rhwp `@rhwp/core` **0.7.19** (vendored: `hwp/vendor/rhwp/VERSION` = `0.7.19`).
+- **대상 엔진:** rhwp `@rhwp/core` **0.7.19** (vendored: `vendor/rhwp/VERSION` = `0.7.19`).
 - 0.7.10~0.7.11 시절 문서의 버전 민감 주장(예: HWPX XML 엔티티 드롭)은 **이 버전에서 재검증**되어 정정되었습니다. 본 명세는 0.7.19에서 경험적으로 확인된 동작만 기술합니다.
 - **0.7.15 → 0.7.19 (2026-07-21).** 가장 큰 변화는 규칙 9의 반전이다: `replaceAll` raw_stream 드롭이 0.7.16에서 업스트림 수정되었다(`d0e866da` / PR #1398 / issue #1385). 규칙 11의 우회 경로(`searchAllText` + delete/insert)는 더 이상 필요하지 않아 `lib/safe-edit.mjs`에서 제거되었다. 나머지 규칙은 0.7.19에서 전량 재실행되어 green.
+- **문서 정합성 패스 (2026-08-03).** 규칙 4·5·6이 `extract_tables.mjs`에 구현되어 SPEC-FIRST → **AGENT-SIDE**로 갱신되었다(플래그: `--data-tables-only` / `--detect-form-type` / `--drop-empty`). 저장소가 `rhwp-cli/hwp/`에서 독립 저장소(`hwp-for-dobby`)로 이동해, 이 문서의 경로 표기를 **저장소 루트 기준 상대 경로**로 통일했다. 엔진 규칙 자체의 변경은 없다.
 - 검증 도구:
-  - 캐노니컬 로더: `hwp/src/lib/_bootstrap.mjs` — `loadDocument(path)`, `emptyDocument()`(Promise — `await` 필요), `version()`, `atomicWriteFile`, `assertHwpOutput`.
-  - 검증 헬퍼: `hwp/src/lib/verify.mjs` — `exportVerify(doc, outPath, {expectPresent,expectAbsent})`, `probeTextCount(doc, q, caseSensitive)`.
-  - API 표면: `hwp/vendor/rhwp/rhwp.d.ts`.
-- 픽스처(자립형): `hwp/samples/fixture-table.hwp`(진짜 .hwp, 셀 `△1,802`, 표 `(0,4,0)` = 9×8/cellCount 68), `hwp/samples/fixture-table.hwpx`(셀 `65,063,026,600`, 표 `(0,0,2)` = 3×8/cellCount 18), `hwp/samples/fixture-form.hwp`(clickhere 필드 `myMsg01`, 빈 값).
+  - 캐노니컬 로더: `src/lib/_bootstrap.mjs` — `loadDocument(path)`, `emptyDocument()`(Promise — `await` 필요), `version()`, `atomicWriteFile`, `assertHwpOutput`.
+  - 검증 헬퍼: `src/lib/verify.mjs` — `exportVerify(doc, outPath, {expectPresent,expectAbsent})`, `probeTextCount(doc, q, caseSensitive)`.
+  - API 표면: `vendor/rhwp/rhwp.d.ts`.
+- 픽스처(자립형): `samples/fixture-table.hwp`(진짜 .hwp, 셀 `△1,802`, 표 `(0,4,0)` = 9×8/cellCount 68), `samples/fixture-table.hwpx`(셀 `65,063,026,600`, 표 `(0,0,2)` = 3×8/cellCount 18), `samples/fixture-form.hwp`(clickhere 필드 `myMsg01`, 빈 값).
 
 ## 검증 등급 (Verdict legend)
 
 - **CONFIRMED** — 0.7.19에서 스크립트 프로브로 직접 재현됨.
 - **CONFIRMED (source/CHANGELOG)** — 소스/CHANGELOG로 확인(런타임 프로브 불가하거나 불필요).
 - **UNTESTABLE-BLACKBOX** — WASM API로 노출되지 않아 런타임 단정 불가; 에이전트측 로직 또는 소스 추론.
-- **SPEC-FIRST** — 아직 스킬에 구현되지 않은 동작을 규정(테스트가 요구 사양을 정의). 기존 동작 기술이 아님.
+- **AGENT-SIDE** — 엔진이 구분하지 않아 **스킬이 대신 처리하는** 규칙. 엔진 동작 기술이 아니라 스킬 쪽 계약이며, 구현된 스크립트/플래그를 함께 명시한다.
+- **SPEC-FIRST** — 아직 스킬에 구현되지 않은 동작을 규정(테스트가 요구 사양을 정의). *현재 이 등급인 규칙은 없다* — 규칙 4·5·6이 마지막이었고 `extract_tables.mjs`에 구현되면서 AGENT-SIDE로 승격되었다.
 
 ---
 
@@ -27,9 +29,9 @@
 1. **머지 원점 저장(merge-origin storage).** 병합된 셀의 텍스트는 병합 범위의 **원점(top-left) 셀에만 한 번** 저장되며, 덮인(covered) 위치에는 셀이 존재하지 않는다. 스킬은 **반드시 `getCellInfo`가 반환하는 `{row, col, rowSpan, colSpan}`로 주소 기반 그리드를 재구성**해야 하며(주의: `cellAddr`라는 필드는 **없다**), 문서(컨트롤) 순서로 셀을 읽으면 병합 데이터가 조용히 어긋난다. — **CONFIRMED.** `test:` `fixture-table.hwpx`의 `getCellInfo(0,0,2,0)`가 `{"row":0,"col":0,"rowSpan":1,"colSpan":4}`를 반환하고, 그리드 재구성 시 덮인 위치가 원점 셀에서 채워지는지 단정.
 2. **`cellCount`는 원점 셀만 센다.** `getTableDimensions.cellCount`는 **원점 셀 수**이며 `rowCount*colCount`가 아니다. 병합이 있으면 `cellCount < rowCount*colCount`. 셀 반복 루프 상한으로 `cellCount`를 쓰고, 전체 그리드는 span으로 복원한다. — **CONFIRMED.** `test:` `fixture-table.hwpx`에서 `getTableDimensions(0,0,2)` = `{rowCount:3,colCount:8,cellCount:18}` → `18 < 24` 단정.
 3. **중첩 표(nested tables)는 셀 문단 내부에 존재.** 평탄(flat) 문단 레벨이 아니라 **각 원점 셀의 문단**을 순회하며 `*ByPath` API로 컨트롤을 프로브해야 발견된다(`getCellParagraphCount` + `getTableDimensionsByPath(cellPath)`). 부모→자식 깊이 우선. **셀 문단당 컨트롤 인덱스 7을 넘는 표는 누락**된다(`NESTED_PROBE_MAX=8` 하드코딩). — **CONFIRMED (source+probe).** `test:` 중첩 표가 부모 셀 메타로 발견되고, 8번째 이후 컨트롤은 미탐지임을 단정(중첩 샘플 부재 시 probe-limit 단위 테스트로 대체).
-4. **범례/작성요령 표 필터링은 에이전트측.** 데이터 표 뒤에 구분자 없이 범례/작성요령 표가 붙는다. 엔진은 구분하지 않으므로 **헤더 행 키워드**로 분류한다: 첫 행에 `연번`/`학위과정`/`성명`/`발표형식` → 데이터; `구분`/`교육연구단 학문분야`이고 `연번` 없음 → 범례(데이터 추출 시 드롭 권장). — **SPEC-FIRST (agent-side, `extract_tables`에 `--data-tables-only` 미구현).** `test:` 헤더 키워드 분류 함수의 단위 테스트(고정 헤더 입력 → 분류 라벨).
-5. **마커형 vs 라벨형 폼.** 폼 상세 컬럼은 두 패턴 중 하나: **(a) 마커형** — 각 줄이 원문자 `①~⑩`로 시작(마커로 split, 나머지가 값, 마커 없는 줄은 직전 키에 누적); **(b) 라벨형** — `라벨: 값`/`라벨：값`(한/전각 콜론). 각 필드는 **표의 별도 ROW(rowSpan)**에 있으며 멀티라인 셀이 아니다. 엔진은 구분하지 않는다. — **SPEC-FIRST (agent-side 파싱 미구현).** `test:` 두 패턴 고정 입력 → 키/값 파싱 단위 테스트.
-6. **플레이스홀더 정규화는 에이전트측.** `'-'`, `'X'`, `';N'`, `'N'`, `'번호'`, `'해당없음'`, `'N/A'`, `'DOI 번호'`, 괄호 변형 등은 빈 문자열로 정규화한다. rhwp는 플레이스홀더와 데이터를 구분하지 않는다. — **SPEC-FIRST (agent-side, `--drop-empty` 미구현).** `test:` 정규화 함수 입력/출력 매핑 단위 테스트.
+4. **범례/작성요령 표 필터링은 에이전트측.** 데이터 표 뒤에 구분자 없이 범례/작성요령 표가 붙는다. 엔진은 구분하지 않으므로 **헤더 행 키워드**로 분류한다: 첫 행에 `연번`/`학위과정`/`성명`/`발표형식` → 데이터; `구분`/`교육연구단 학문분야`이고 `연번` 없음 → 범례(데이터 추출 시 드롭 권장). — **AGENT-SIDE (구현됨: `extract_tables.mjs --data-tables-only`).** 판정은 **보수적**이다: 확신이 없으면 KEEP하고, 첫 행이 `구분`/`작성요령`으로 시작하면서 `연번`이 없을 때만 DROP하며 드롭 사실을 stderr로 알린다. `test:` `test/spec/tables.test.mjs` — 플래그가 정상 동작하고, `fixture-table.hwp`의 숫자 데이터 표를 드롭하지 **않음**을 단정.
+5. **마커형 vs 라벨형 폼.** 폼 상세 컬럼은 두 패턴 중 하나: **(a) 마커형** — 각 줄이 원문자 `①~⑩`로 시작(마커로 split, 나머지가 값, 마커 없는 줄은 직전 키에 누적); **(b) 라벨형** — `라벨: 값`/`라벨：값`(한/전각 콜론). 각 필드는 **표의 별도 ROW(rowSpan)**에 있으며 멀티라인 셀이 아니다. 엔진은 구분하지 않는다. — **AGENT-SIDE (구현됨: `extract_tables.mjs --detect-form-type`).** 그리드를 재구성하지 않고 표마다 `formType: 'marker' | 'label' | 'plain'`을 **주석으로만** 붙인다. `test:` `test/spec/tables.test.mjs` — 플래그 동작 및 출력 형태 단정.
+6. **플레이스홀더 정규화는 에이전트측.** `'-'`, `'X'`, `';N'`, `'N'`, `'번호'`, `'해당없음'`, `'N/A'`, `'DOI 번호'`, 괄호 변형 등은 빈 문자열로 정규화한다. rhwp는 플레이스홀더와 데이터를 구분하지 않는다. — **AGENT-SIDE (구현됨: `extract_tables.mjs --drop-empty`).** 방출되는 그리드 텍스트에만 적용된다. `test:` `test/spec/tables.test.mjs` — 플래그 동작 및 출력 형태 단정.
 7. **풀-와이드 공백은 U+2007(figure-space).** 표/수치 텍스트의 전각 공백은 **U+2007**(figure-space)로 추출되며 U+3000(ideographic-space)이 아니다. 필드 공백 검색/매칭은 **U+2007 기준**(또는 `\s`)으로 해야 한다. — **CONFIRMED.** `test:` HWPX 샘플 추출 텍스트에 U+2007 존재, U+3000 부재 단정.
 8. **`getPageTextLayout`은 근사 레이아웃.** `{text,x,y,w,h,charX[],fontFamily,fontSize,...}` 런 배열을 y 기준 정렬로 반환하며, 같은 줄의 런은 **y±(런 높이/2)** 오차로 묶인다. 컬럼/행 구조 추론용이며 **픽셀 정확 위치가 아니다**(정밀 렌더는 `enhanced/` CLI render/export-png). — **CONFIRMED.** `test:` `fixture-table.hwp` page 0에서 런을 `floor(y)`로 그룹화해 줄 묶음이 안정적인지 단정.
 
@@ -140,9 +142,9 @@
 |---|---|---|---|---|---|
 | #1 | merge-origin 저장 | 1 | #12 | insertTextLogical 컨트롤 카운트 | 16 |
 | #2 | 중첩 표 | 3 | #13 | 폼 #838 | 17–19 |
-| #3 | 범례/작성요령 필터 | 4 (SPEC-FIRST) | #14 | evaluateTableFormula | (Matrix) |
-| #4 | 플레이스홀더 정규화 | 6 (SPEC-FIRST) | #15 | HWPX 엔티티 | 20 |
-| #5 | 마커/라벨 폼 | 5 (SPEC-FIRST) | #16 | NFD/NFC 파일명 | 21 |
+| #3 | 범례/작성요령 필터 | 4 (AGENT-SIDE) | #14 | evaluateTableFormula | (Matrix) |
+| #4 | 플레이스홀더 정규화 | 6 (AGENT-SIDE) | #15 | HWPX 엔티티 | 20 |
+| #5 | 마커/라벨 폼 | 5 (AGENT-SIDE) | #16 | NFD/NFC 파일명 | 21 |
 | #6 | U+2007 전각공백 | 7 | #17 | PUA tofu | 22 |
 | #7 | cellCount=원점만 | 2 | #18 | getPageTextLayout 근사 | 8 |
 | #8 | replaceAll 왕복 생존 | 9 | #19 | control_mask 가드 | 27 (non-asserting) |
@@ -150,4 +152,4 @@
 | #10 | OOB 셀 throw | 15 | #21 | HWPX 출력 거부 | 23 |
 | #11 | header/footer apply_to | 28 | #22 | 메모 미모델링/조용한 삭제 | 29 |
 
-**관련 파일(절대 경로):** `/Users/ybang_mac/Development/side-projects/rhwp-cli/hwp/src/lib/_bootstrap.mjs`, `.../hwp/src/lib/verify.mjs`, `.../hwp/src/lib/memo.mjs` (메모 탐지/읽기/가드), `.../hwp/vendor/rhwp/rhwp.d.ts`, `.../hwp/vendor/rhwp/VERSION` (= `0.7.19`).
+**관련 파일(저장소 루트 기준 상대 경로):** `src/lib/_bootstrap.mjs`(캐노니컬 로더/출력 정책), `src/lib/verify.mjs`(왕복 검증), `src/lib/memo.mjs`(메모 탐지/읽기/가드), `src/lib/safe-edit.mjs`(치환 choke point), `src/core/extract_tables.mjs`(규칙 1·2·4·5·6), `vendor/rhwp/rhwp.d.ts`(API 표면), `vendor/rhwp/VERSION` (= `0.7.19`).

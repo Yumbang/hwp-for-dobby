@@ -77,7 +77,7 @@
 // (even with zero tables — check tableCount), 1 LOAD (load/extraction
 // failure), 2 USAGE (bad arguments), 3 NOT_FOUND (--table index absent).
 //
-// Engine notes (verified on rhwp v0.7.15, see spec/rhwp-behavior.md §1):
+// Engine notes (verified on the pinned rhwp v0.7.19, see spec/rhwp-behavior.md §1):
 // - A paragraph's control list mixes tables with images/shapes/section
 //   defs, and one paragraph can host SEVERAL tables, so every control
 //   index is probed (getControlTextPositions supplies the control count;
