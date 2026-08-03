@@ -12,6 +12,7 @@
     "test:pin": "node --test test/pin-integrity.test.mjs",
     "test:smoke": "node --test test/smoke.test.mjs",
     "build": "node scripts/build.mjs",
+    "skill": "node scripts/install-skill.mjs",
     "vendor-sync": "node scripts/vendor-sync.mjs",
     "bump": "node scripts/bump.mjs"
   },
