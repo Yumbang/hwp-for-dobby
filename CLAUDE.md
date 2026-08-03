@@ -25,6 +25,19 @@ Pinned in `vendor/rhwp/VERSION` (0.7.19), vendored from npm `@rhwp/core`. `test/
 
 ## Adding a script
 
-Put it in `core/` or `enhanced/`, import from `../lib/`, follow the five rules, add a `test/spec/` case, then `npm run build` to refresh the dist zip (allowlist: SKILL.md, src, spec, vendor/rhwp).
+Put it in `core/` or `enhanced/`, import from `../lib/`, follow the five rules, add a `test/spec/` case, then `npm run build` to refresh the dist zip.
+
+## Delivery
+
+The skill reaches users two ways, and both read the SAME allowlist — `scripts/_payload.mjs`:
+
+- `scripts/build.mjs` → `dist/hwp-skill.zip` for a claude.ai upload.
+- `scripts/install-skill.mjs` → copies into `~/.claude/skills/hwp` (or `.claude/skills/`, or the `agents` target's `.agents/skills/` + an `AGENTS.md` pointer).
+
+Change what the skill contains in `_payload.mjs` only. Inlining a second allowlist means a claude.ai upload and a Claude Code install become different skills — `test/spec/install-skill.test.mjs` guards the seam, along with the installer's refusal to clobber a symlink or a directory it did not create.
+
+`install-skill.mjs status` compares content hashes and exits 5 when an installed copy has drifted from the repo. A stale skill is worse than no skill, so keep that loud.
+
+Setup and install instructions live in `README.md` (Korean) — if you change how a tier is resolved, packaged, or installed, update that too.
 
 The engine is a moving third-party target, so don't promise round-trips it can't deliver. When unsure, check `spec/` and verify empirically.
