@@ -21,28 +21,73 @@
 // exactly as an agent (or a wrapping tool) would invoke it, and inspect
 // status/stdout/stderr + the actual output bytes on disk.
 //
-// Robustness on hosts that genuinely lack the binary: if RHWP_BIN does not
-// exist, the WITH-CLI cases are SKIPPED (test.skip) but the degrade cases STILL
-// run — the degrade guarantee is the part that must hold on every host.
+// Robustness on hosts that genuinely lack the binary: if no CLI resolves, the
+// WITH-CLI cases are SKIPPED (test.skip) but the degrade cases STILL run — the
+// degrade guarantee is the part that must hold on every host.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { existsSync, mkdtempSync, rmSync, statSync, readFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
+
+import { tryResolveCli } from "../../src/lib/_resolve_cli.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, "..", "..");
 
 const HWP = "samples/fixture-table.hwp"; // genuine HWP (relative to ROOT/cwd)
 
-// The native CLI under test. Present on Claude Code; may be absent on a bare
-// CI host — we degrade the WITH-CLI suite to skipped in that case.
-const RHWP_BIN =
-  "/Users/ybang_mac/Development/side-projects/rhwp-cli/rhwp/target/release/rhwp";
-const HAS_CLI = existsSync(RHWP_BIN);
+// The native CLI under test, located exactly the way the enhanced scripts
+// locate it at runtime: $RHWP_BIN → vendor/bin/rhwp-<platform>-<arch> → `rhwp`
+// on PATH (lib/_resolve_cli.mjs). Using the real resolver rather than a fixed
+// path is what makes this suite run for ANY contributor who installed the
+// binary per README "enhanced 티어 설정" — a hardcoded path silently skipped
+// these four tests on every machine but one.
+const RHWP_BIN = tryResolveCli();
+const HAS_CLI = RHWP_BIN !== null;
+const NO_CLI_REASON =
+  "no native rhwp CLI resolved ($RHWP_BIN → vendor/bin/rhwp-<platform>-<arch> → PATH). " +
+  "See README: enhanced 티어 설정 (rhwp 바이너리 설치).";
+
+// PNG rendering is a SECOND, narrower capability: it needs the CLI to have been
+// built with the `native-skia` cargo feature. The official GitHub release
+// binaries are NOT — `rhwp export-png` prints "native-skia feature 가 활성화되어야
+// 합니다" and, notably, still exits 0 while writing nothing. So neither the exit
+// status nor `--help` (which advertises export-png regardless) can be trusted:
+// we probe for the only thing that settles it, an actual PNG on disk. This is
+// the same criterion render.mjs applies at runtime, which is why render.mjs
+// correctly degrades to exit 4 on a stock release binary. Everything else in
+// the enhanced tier (PDF, text/markdown, dump) works on a stock build.
+function cliProducesPng(bin) {
+  if (!bin) return false;
+  const probeDir = mkdtempSync(join(tmpdir(), "hwp-skia-probe-"));
+  try {
+    spawnSync(bin, ["export-png", HWP, "-p", "0", "-o", probeDir], {
+      cwd: ROOT,
+      encoding: "utf8",
+    });
+    return existsSync(probeDir) && readdirSync(probeDir).some((f) => f.endsWith(".png"));
+  } catch {
+    return false;
+  } finally {
+    rmSync(probeDir, { recursive: true, force: true });
+  }
+}
+const HAS_SKIA = HAS_CLI && cliProducesPng(RHWP_BIN);
+const NO_SKIA_REASON =
+  `rhwp CLI at ${RHWP_BIN} was built WITHOUT the native-skia feature, so it cannot ` +
+  "emit PNGs (release binaries are like this). Build one with: " +
+  "cargo build --release --features native-skia";
 
 // A scratch dir for all produced artifacts (PNG/PDF/markdown). Created lazily.
 let WORK = null;
@@ -106,7 +151,7 @@ function assertDegradeMessage(stderr, script) {
 
 test(
   "render.mjs (with CLI): emits a real, non-empty PNG (>1KB) and exits 0",
-  { skip: HAS_CLI ? false : `native rhwp CLI not present at ${RHWP_BIN}` },
+  { skip: HAS_SKIA ? false : HAS_CLI ? NO_SKIA_REASON : NO_CLI_REASON },
   () => {
     const out = join(workdir(), "render.png");
     const r = runWithCli("src/enhanced/render.mjs", [
@@ -132,9 +177,50 @@ test(
   },
 );
 
+// The mirror case, and the one a contributor following the README actually
+// hits: a stock release binary IS present but has no native-skia. render.mjs
+// must NOT report success and must NOT leave a 0-byte/garbage .png behind —
+// the CLI itself exits 0 here while writing nothing, so this asserts the skill
+// catches that and degrades honestly. Runs only where that combination exists.
+test(
+  "render.mjs (CLI without native-skia): exits 4 and writes no PNG, instead of faking success",
+  {
+    skip: HAS_CLI && !HAS_SKIA
+      ? false
+      : HAS_CLI
+        ? "CLI has native-skia — the real render path is covered above"
+        : NO_CLI_REASON,
+  },
+  () => {
+    const out = join(workdir(), "no-skia-render.png");
+    const r = runWithCli("src/enhanced/render.mjs", [
+      HWP,
+      "--page",
+      "0",
+      "--output",
+      out,
+    ]);
+    assert.equal(
+      r.status,
+      4,
+      `render must degrade to exit 4 on a skia-less CLI (got ${r.status}): ${r.stderr}`,
+    );
+    assert.match(
+      r.stderr,
+      /native-skia|produced no PNG/i,
+      "render must say WHY it could not rasterize (no native-skia build)",
+    );
+    assert.equal(
+      existsSync(out),
+      false,
+      "render must not leave an output file behind when it could not rasterize",
+    );
+  },
+);
+
 test(
   "export_pdf.mjs (with CLI): emits a real PDF (>1KB, %PDF- header) and exits 0",
-  { skip: HAS_CLI ? false : `native rhwp CLI not present at ${RHWP_BIN}` },
+  { skip: HAS_CLI ? false : NO_CLI_REASON },
   () => {
     const out = join(workdir(), "export.pdf");
     const r = runWithCli("src/enhanced/export_pdf.mjs", [HWP, "--output", out]);
@@ -150,7 +236,7 @@ test(
 
 test(
   "read_precise.mjs (with CLI): markdown contains a table pipe and a known cell value",
-  { skip: HAS_CLI ? false : `native rhwp CLI not present at ${RHWP_BIN}` },
+  { skip: HAS_CLI ? false : NO_CLI_REASON },
   () => {
     // No --output → the extracted markdown payload goes to stdout (this is the
     // content the agent reads); the JSON result is written to stderr.
@@ -179,7 +265,7 @@ test(
 
 test(
   "debug.mjs (with CLI): --op dump prints a non-empty IR dump and exits 0",
-  { skip: HAS_CLI ? false : `native rhwp CLI not present at ${RHWP_BIN}` },
+  { skip: HAS_CLI ? false : NO_CLI_REASON },
   () => {
     const r = runWithCli("src/enhanced/debug.mjs", [HWP, "--op", "dump"]);
     assert.equal(r.status, 0, `debug dump must exit 0: ${r.stderr}`);

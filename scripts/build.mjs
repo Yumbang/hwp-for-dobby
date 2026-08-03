@@ -42,15 +42,15 @@ import {
   copyFileSync,
   existsSync,
   mkdirSync,
-  readdirSync,
   rmSync,
   statSync,
   utimesSync,
 } from "node:fs";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { EXIT, fail } from "../src/lib/exit-codes.mjs";
+import { collectPayload } from "./_payload.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, "..");
@@ -59,14 +59,8 @@ const OUT_DIR = join(ROOT, "dist");
 const OUT_PATH = join(OUT_DIR, "hwp-skill.zip");
 
 // ── Allowlist ──────────────────────────────────────────────────────────────
-// Each entry is a path relative to the repo root. Files are taken verbatim;
-// directories are walked recursively. PRUNE excludes a subtree even when it
-// lives under an included directory (vendor/bin under vendor — though here we
-// only include vendor/rhwp, PRUNE is belt-and-suspenders against a future
-// `vendor/` allowlist entry).
-const ALLOW_FILES = ["SKILL.md", "README.md", "package.json", "LICENSE.txt"];
-const ALLOW_DIRS = ["spec", "src", join("vendor", "rhwp")];
-const PRUNE_DIRS = [join("vendor", "bin")];
+// Defined once in scripts/_payload.mjs and shared with install-skill.mjs, so
+// what ships in the ZIP and what lands in ~/.claude/skills/hwp can never drift.
 
 // Manifest assertions, all repo-relative POSIX paths.
 const REQUIRE_ENTRIES = [
@@ -90,64 +84,12 @@ const FORBID_TOP = [
   "evals",
 ];
 
-// Normalize an OS path (relative to ROOT) to a POSIX archive path.
-function toPosix(p) {
-  return sep === "/" ? p : p.split(sep).join("/");
-}
-
-function isPruned(relPath) {
-  return PRUNE_DIRS.some(
-    (d) => relPath === d || relPath.startsWith(d + sep),
-  );
-}
-
-// Recursively collect regular files under an allowlisted dir, repo-relative.
-function walkDir(relDir, acc) {
-  const abs = join(ROOT, relDir);
-  let entries;
-  try {
-    entries = readdirSync(abs, { withFileTypes: true });
-  } catch (e) {
-    fail(EXIT.NOT_FOUND, `build: cannot read directory ${relDir}: ${e.message}`);
-  }
-  for (const ent of entries) {
-    const childRel = join(relDir, ent.name);
-    if (isPruned(childRel)) continue;
-    if (ent.isDirectory()) {
-      walkDir(childRel, acc);
-    } else if (ent.isFile()) {
-      acc.push(childRel);
-    }
-    // Symlinks / sockets / etc. are intentionally skipped.
-  }
-}
-
 // ── 1. Build the sorted member list ─────────────────────────────────────────
-const members = [];
-
-for (const f of ALLOW_FILES) {
-  const abs = join(ROOT, f);
-  if (!existsSync(abs)) {
-    fail(EXIT.NOT_FOUND, `build: required file missing from repo: ${f}`);
-  }
-  if (!statSync(abs).isFile()) {
-    fail(EXIT.LOAD, `build: allowlisted path is not a regular file: ${f}`);
-  }
-  members.push(f);
-}
-
-for (const d of ALLOW_DIRS) {
-  const abs = join(ROOT, d);
-  if (!existsSync(abs) || !statSync(abs).isDirectory()) {
-    fail(EXIT.NOT_FOUND, `build: required directory missing from repo: ${d}`);
-  }
-  walkDir(d, members);
-}
-
-// Sort the POSIX form for a stable, machine-independent member order.
-const posixMembers = [...new Set(members.map(toPosix))].sort();
-if (posixMembers.length === 0) {
-  fail(EXIT.LOAD, "build: allowlist resolved to zero files");
+let posixMembers;
+try {
+  posixMembers = collectPayload(ROOT);
+} catch (e) {
+  fail(EXIT.NOT_FOUND, `build: ${e.message}`);
 }
 
 // ── 2. Stage with fixed timestamps, then zip deterministically ───────────────
