@@ -50,13 +50,16 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { EXIT, fail } from "../src/lib/exit-codes.mjs";
-import { collectPayload } from "./_payload.mjs";
+import { collectPayload, skillName } from "./_payload.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, "..");
 
+// Named after the skill itself (SKILL.md frontmatter), so the file a user
+// uploads to claude.ai carries the same identity as the installed directory.
+const SKILL = skillName(ROOT);
 const OUT_DIR = join(ROOT, "dist");
-const OUT_PATH = join(OUT_DIR, "hwp-skill.zip");
+const OUT_PATH = join(OUT_DIR, `${SKILL}.zip`);
 
 // ── Allowlist ──────────────────────────────────────────────────────────────
 // Defined once in scripts/_payload.mjs and shared with install-skill.mjs, so

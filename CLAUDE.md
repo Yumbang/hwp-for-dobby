@@ -50,8 +50,8 @@ Put it in `core/` or `enhanced/`, import from `../lib/`, follow the rules above 
 
 The skill reaches users two ways, and both read the SAME allowlist — `scripts/_payload.mjs`:
 
-- `scripts/build.mjs` → `dist/hwp-skill.zip` for a claude.ai upload.
-- `scripts/install-skill.mjs` → copies into `~/.claude/skills/hwp` (or `.claude/skills/`, or the `agents` target's `.agents/skills/` + an `AGENTS.md` pointer).
+- `scripts/build.mjs` → `dist/hwp-for-dobby.zip` for a claude.ai upload.
+- `scripts/install-skill.mjs` → copies into `~/.claude/skills/hwp-for-dobby` (or `.claude/skills/`, or the `agents` target's `.agents/skills/` + an `AGENTS.md` pointer).
 
 Change what the skill contains in `_payload.mjs` only. Inlining a second allowlist means a claude.ai upload and a Claude Code install become different skills — `test/spec/install-skill.test.mjs` guards the seam, along with the installer's refusal to clobber a symlink or a directory it did not create.
 

@@ -61,14 +61,17 @@ import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { EXIT, fail } from "../src/lib/exit-codes.mjs";
-import { collectPayload } from "./_payload.mjs";
+import { collectPayload, skillName } from "./_payload.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, "..");
 
-// The skill's directory name — must match `name: hwp` in SKILL.md's frontmatter,
-// because the directory name is what becomes the /hwp invocation.
-const SKILL = "hwp";
+// The skill's directory name IS its frontmatter `name:` — the directory name is
+// what becomes the /<name> invocation, so it is read from SKILL.md rather than
+// repeated here. A hardcoded copy that drifts installs the skill into a
+// directory that does not match its own frontmatter, and it then loads as
+// nothing at all, with no error to notice.
+const SKILL = skillName(ROOT);
 const SUMMARY =
   "Read, extract tables from, edit, fill and create Korean HWP/HWPX (한글) documents.";
 

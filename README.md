@@ -57,8 +57,8 @@ node scripts/install-skill.mjs install --dry-run     # 무엇이 바뀔지만 �
 
 | 타깃 | Global | Project |
 |---|---|---|
-| `claude` | `~/.claude/skills/hwp/` | `./.claude/skills/hwp/` |
-| `agents` | `~/.agents/skills/hwp/` | `./.agents/skills/hwp/` + `AGENTS.md` |
+| `claude` | `~/.claude/skills/hwp-for-dobby/` | `./.claude/skills/hwp-for-dobby/` |
+| `agents` | `~/.agents/skills/hwp-for-dobby/` | `./.agents/skills/hwp-for-dobby/` + `AGENTS.md` |
 
 Claude Code는 스킬을 **스스로 탐지**하므로 `claude` 타깃은 스킬 디렉터리만 씁니다 — `CLAUDE.md`는 건드리지 않습니다. `agents` 타깃은 `AGENTS.md`에 짧은 포인터 섹션을 추가하는데, 그 에이전트들에는 스킬 자동 탐지가 없어서 **포인터가 곧 탐지 수단**이기 때문입니다(원치 않으면 `--no-agents-md`). 섹션은 HTML 마커 사이에 들어가므로 재실행하면 제자리에서 갱신되고 나머지 내용은 건드리지 않습니다. 경로는 상대경로로 적히므로 프로젝트 스코프 설치는 **커밋해서 팀원·CI가 체크아웃만으로 받게** 할 수 있습니다.
 
@@ -68,7 +68,7 @@ Claude Code는 스킬을 **스스로 탐지**하므로 `claude` 타깃은 스킬
 
 ```bash
 node scripts/install-skill.mjs list
-node ~/.claude/skills/hwp/src/core/info.mjs samples/fixture-table.hwp
+node ~/.claude/skills/hwp-for-dobby/src/core/info.mjs samples/fixture-table.hwp
 # → {"input":...,"engineVersion":"0.7.19","sourceFormat":"hwp","pageCount":6,...}
 ```
 
@@ -76,7 +76,7 @@ node ~/.claude/skills/hwp/src/core/info.mjs samples/fixture-table.hwp
 
 > **스킬을 직접 고치면서 쓸 때**는 복사 대신 심링크가 편합니다(편집이 즉시 반영):
 > ```bash
-> ln -s ~/dev/hwp-for-dobby ~/.claude/skills/hwp
+> ln -s ~/dev/hwp-for-dobby ~/.claude/skills/hwp-for-dobby
 > ```
 > 대신 대상 폴더를 옮기거나 이름을 바꾸면 스킬이 **아무 에러 없이 목록에서 사라집니다.** `install`은 이 심링크를 덮어쓰지 않고 거부하며, `list`가 `linked`로 표시해 줍니다. `/hwp`가 안 보이면 `node scripts/install-skill.mjs list`부터 확인하세요.
 
@@ -88,10 +88,10 @@ node ~/.claude/skills/hwp/src/core/info.mjs samples/fixture-table.hwp
 
 ```bash
 npm run build
-# → {"ok":true,"outputPath":".../dist/hwp-skill.zip","entryCount":35,"bytes":...}
+# → {"ok":true,"outputPath":".../dist/hwp-for-dobby.zip","entryCount":35,"bytes":...}
 ```
 
-`dist/hwp-skill.zip`에는 런타임에 필요한 것만 들어갑니다(허용목록: `SKILL.md`, `README.md`, `package.json`, `LICENSE.txt`, `spec/`, `src/`, `vendor/rhwp/`). `test/`·`samples/`·`scripts/`·`node_modules/`는 들어가지 않으며, 빌드는 **바이트 단위로 재현 가능**합니다(같은 커밋 → 같은 sha256).
+`dist/hwp-for-dobby.zip`에는 런타임에 필요한 것만 들어갑니다(허용목록: `SKILL.md`, `README.md`, `package.json`, `LICENSE.txt`, `spec/`, `src/`, `vendor/rhwp/`). `test/`·`samples/`·`scripts/`·`node_modules/`는 들어가지 않으며, 빌드는 **바이트 단위로 재현 가능**합니다(같은 커밋 → 같은 sha256).
 
 이 허용목록은 `scripts/_payload.mjs`에 **한 번만** 정의되어 ZIP 빌드와 `install-skill.mjs`가 함께 씁니다. 그래서 claude.ai에 올린 스킬과 Claude Code에 설치된 스킬이 서로 다른 내용일 수 없습니다.
 
@@ -105,9 +105,9 @@ npm run build
 - **enhanced 티어는 claude.ai에서 동작하지 않습니다.** 네이티브 바이너리를 쓸 수 없기 때문입니다. 해당 스크립트는 exit 4와 안내 메시지로 정직하게 실패하고, **core 14개는 전부 정상 동작**합니다.
 - 업로더가 "스킬 폴더 이름이 스킬 이름과 다르다"며 거부하면, ZIP 최상위에 `hwp/` 폴더를 만들어 감싸서 올리세요:
   ```bash
-  rm -rf dist/wrap && mkdir -p dist/wrap/hwp
-  unzip -q dist/hwp-skill.zip -d dist/wrap/hwp
-  (cd dist/wrap && zip -qr ../hwp-skill-folder.zip hwp)
+  rm -rf dist/wrap && mkdir -p dist/wrap/hwp-for-dobby
+  unzip -q dist/hwp-for-dobby.zip -d dist/wrap/hwp-for-dobby
+  (cd dist/wrap && zip -qr ../hwp-for-dobby-folder.zip hwp-for-dobby)
   ```
 
 ### C. enhanced 티어 — rhwp 네이티브 바이너리 (Claude Code 전용)
@@ -137,7 +137,7 @@ npm run build
 **설치 (macOS Apple Silicon 예시)** — 다른 플랫폼은 위 표의 자산 이름과 파일명만 바꾸면 됩니다.
 
 ```bash
-cd ~/.claude/skills/hwp
+cd ~/.claude/skills/hwp-for-dobby
 mkdir -p vendor/bin
 curl -sSL -o /tmp/rhwp.tar.gz \
   https://github.com/edwardkim/rhwp/releases/download/v0.7.19/rhwp-v0.7.19-macos-aarch64.tar.gz
@@ -175,7 +175,7 @@ node src/enhanced/read_precise.mjs samples/fixture-table.hwp --format markdown |
 git clone https://github.com/edwardkim/rhwp.git && cd rhwp
 git checkout v0.7.19
 cargo build --release --features native-skia
-cp target/release/rhwp ~/.claude/skills/hwp/vendor/bin/rhwp-darwin-arm64
+cp target/release/rhwp ~/.claude/skills/hwp-for-dobby/vendor/bin/rhwp-darwin-arm64
 ```
 
 ---
@@ -349,7 +349,7 @@ npm test    # pin-integrity + smoke + golden + spec(read/tables/sections/heading
 ```bash
 npm run bump <version>   # 엔진 버전 올리기 (게이트 통과해야만 수락)
 npm run vendor-sync      # node_modules/@rhwp/core → vendor/rhwp/ 재복사 + sha256 검증
-npm run build            # dist/hwp-skill.zip 재생성
+npm run build            # dist/hwp-for-dobby.zip 재생성
 npm run skill -- status  # 설치본이 이 저장소와 같은 버전인지 (= node scripts/install-skill.mjs)
 ```
 

@@ -18,6 +18,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { skillName } from "../../scripts/_payload.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, "..", "..");
@@ -42,13 +43,20 @@ test("SKILL.md is non-trivial (sanity: file actually loaded)", () => {
   );
 });
 
-test("frontmatter declares `name: hwp` (skill identity / routing)", () => {
-  // Must be a YAML frontmatter key, not just the word 'hwp' somewhere in prose.
+test("frontmatter declares a usable `name:` (skill identity / routing)", () => {
+  // Must be a YAML frontmatter key, not just the name somewhere in prose. The
+  // VALUE is deliberately not pinned here — scripts/_payload.mjs' skillName()
+  // is the single source, and test/spec/portability.test.mjs proves every
+  // consumer (installer, builder, package.json, the docs) agrees with it. What
+  // this guards is the disclosure itself: without a syntactically valid name
+  // line the skill has no identity and never routes, silently.
   assert.match(
     SKILL,
-    /^name:\s*hwp\s*$/m,
-    "LOST DISCLOSURE: SKILL.md frontmatter no longer declares `name: hwp` — the skill loses its identity and won't route correctly.",
+    /^name:\s*[a-z0-9][a-z0-9-]*\s*$/m,
+    "LOST DISCLOSURE: SKILL.md frontmatter no longer declares a usable `name:` — the skill loses its identity and won't route correctly.",
   );
+  // …and that our reader and this regex see the same thing.
+  assert.equal(/^name:\s*([a-z0-9][a-z0-9-]*)\s*$/m.exec(SKILL)[1], skillName(ROOT));
 });
 
 test("retains the form pre-fill corruption warning (#838)", () => {
