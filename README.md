@@ -88,7 +88,7 @@ node ~/.claude/skills/hwp-for-dobby/src/core/info.mjs samples/fixture-table.hwp
 
 ```bash
 npm run build
-# → {"ok":true,"outputPath":".../dist/hwp-for-dobby.zip","entryCount":35,"bytes":...}
+# → {"ok":true,"outputPath":".../dist/hwp-for-dobby.zip","entryCount":47,"bytes":...}
 ```
 
 `dist/hwp-for-dobby.zip`에는 런타임에 필요한 것만 들어갑니다(허용목록: `SKILL.md`, `README.md`, `package.json`, `LICENSE.txt`, `spec/`, `src/`, `vendor/rhwp/`). `test/`·`samples/`·`scripts/`·`node_modules/`는 들어가지 않으며, 빌드는 **바이트 단위로 재현 가능**합니다(같은 커밋 → 같은 sha256).
@@ -103,7 +103,7 @@ npm run build
 
 - 업로드한 스킬은 **계정 개인용**이며 **서피스 간 동기화되지 않습니다.** Claude Code에 깔아도 claude.ai에는 따로 올려야 합니다.
 - **enhanced 티어는 claude.ai에서 동작하지 않습니다.** 네이티브 바이너리를 쓸 수 없기 때문입니다. 해당 스크립트는 exit 4와 안내 메시지로 정직하게 실패하고, **core 14개는 전부 정상 동작**합니다.
-- 업로더가 "스킬 폴더 이름이 스킬 이름과 다르다"며 거부하면, ZIP 최상위에 `hwp/` 폴더를 만들어 감싸서 올리세요:
+- 업로더가 "스킬 폴더 이름이 스킬 이름과 다르다"며 거부하면, ZIP 최상위에 `hwp-for-dobby/` 폴더를 만들어 감싸서 올리세요:
   ```bash
   rm -rf dist/wrap && mkdir -p dist/wrap/hwp-for-dobby
   unzip -q dist/hwp-for-dobby.zip -d dist/wrap/hwp-for-dobby
