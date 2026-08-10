@@ -1063,11 +1063,35 @@ function gradeConfidence(strategy, nodes, report) {
       if (nodes.length < 3) reasons.push(`only ${nodes.length} clause node(s)`);
       break;
     case "marker": {
+      // Confidence is about the QUALITY of the evidence, not the DEPTH of the
+      // tree. An earlier version required ≥2 learned levels for anything above
+      // "low", which treated "this document has a flat outline" as a reason for
+      // doubt — and a flat outline is extremely common. Measured over 60 real
+      // documents: 15 of the 22 marker documents were graded low, every one of
+      // them for exactly that reason, several while finding 11-18 perfectly
+      // good headings. A warning that fires on two thirds of ordinary documents
+      // is a warning people learn to scroll past, and it shares its voice with
+      // the memo and table-flattening warnings, which must keep their bite.
+      //
+      // So a single level is fine when it is well supported; what earns "low"
+      // is thin evidence — few headings, or a class adopted on the strength of
+      // barely any lines.
       const classes = Object.keys(report.levels).length;
-      if (classes >= 2 && nodes.length >= 5) confidence = "medium";
-      else {
+      const adopted = (report.classes ?? []).filter((c) => c.adopted);
+      const thinnest = adopted.length ? Math.min(...adopted.map((c) => c.short ?? 0)) : 0;
+
+      if (nodes.length < 4) {
         confidence = "low";
-        reasons.push(`learned ${classes} level(s) from ${nodes.length} node(s)`);
+        reasons.push(`only ${nodes.length} heading(s) found`);
+      } else if (thinnest < MIN_CLASS_SUPPORT + 1) {
+        confidence = "low";
+        reasons.push(`a marker level rests on only ${thinnest} line(s)`);
+      } else if (classes >= 2) {
+        confidence = "medium";
+      } else {
+        // One level, well supported: a flat outline, reported as such.
+        confidence = "medium";
+        reasons.push(`flat outline (1 level, ${nodes.length} headings)`);
       }
       break;
     }
