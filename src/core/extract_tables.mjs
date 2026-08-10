@@ -94,45 +94,17 @@
 // - Full-width spaces surface as U+2007 FIGURE SPACE, not U+3000.
 
 import { loadDocument } from "../lib/_bootstrap.mjs";
+// Strict option helpers (a flag given without a value is a USAGE error, not a
+// silent default) now live in lib/argv.mjs — this file was where they were
+// written, and every other script needed them too.
+import { flag, inputPath, intArg, strArg } from "../lib/argv.mjs";
 import { EXIT, fail } from "../lib/exit-codes.mjs";
+import { renderTableMarkdown } from "../lib/render_md.mjs";
+import { extractTables } from "../lib/tables.mjs";
 
-// Option helpers that fail loudly: a flag given without a value (or with
-// another flag accidentally consumed as its value) is a usage error, not a
-// silent default — silently mis-parsed options here mean silently wrong or
-// missing table data downstream.
-function strArg(name, dflt) {
-  const i = process.argv.indexOf(name);
-  if (i < 0) return dflt;
-  const v = process.argv[i + 1];
-  if (v === undefined || v.startsWith("--")) {
-    fail(EXIT.USAGE, `error: ${name} requires a value`);
-  }
-  return v;
-}
-function intArg(name, dflt) {
-  const i = process.argv.indexOf(name);
-  if (i < 0) return dflt;
-  const v = process.argv[i + 1];
-  const n = v !== undefined && !v.startsWith("--") ? Number.parseInt(v, 10) : NaN;
-  if (!Number.isInteger(n) || n < 0 || String(n) !== v.trim()) {
-    fail(
-      EXIT.USAGE,
-      `error: ${name} requires a non-negative integer (got ${v === undefined ? "nothing" : JSON.stringify(v)})`,
-    );
-  }
-  return n;
-}
-function flag(name) {
-  return process.argv.includes(name);
-}
-
-const input = process.argv[2];
-if (!input || input.startsWith("--")) {
-  fail(
-    EXIT.USAGE,
-    "usage: extract_tables.mjs <input.hwp|.hwpx> [--format json|markdown] [--table N] [--fill-merged] [--no-nested] [--max-depth N] [--data-tables-only] [--drop-empty] [--detect-form-type]",
-  );
-}
+const input = inputPath(
+  "usage: extract_tables.mjs <input.hwp|.hwpx> [--format json|markdown] [--table N] [--fill-merged] [--no-nested] [--max-depth N] [--data-tables-only] [--drop-empty] [--detect-form-type]",
+);
 const format = strArg("--format", "json");
 if (format !== "json" && format !== "markdown") {
   fail(EXIT.USAGE, `unknown --format: ${format} (expected json|markdown)`);
@@ -144,13 +116,6 @@ const maxDepth = intArg("--max-depth", 3);
 const dataTablesOnly = flag("--data-tables-only");
 const dropEmpty = flag("--drop-empty");
 const detectFormType = flag("--detect-form-type");
-
-// Per cell paragraph, how many control indices to probe for nested tables.
-// There is no API that counts controls inside a cell paragraph, so this is
-// a bounded guess; 8 is far beyond anything observed in real documents
-// (spec rule 3: NESTED_PROBE_MAX is the engine's hardcoded ceiling — tables
-// behind control index >= 8 in a cell paragraph are not discoverable).
-const NESTED_PROBE_MAX = 8;
 
 let doc;
 try {
@@ -252,189 +217,24 @@ function detectTableFormType(grid, rowCount, colCount) {
   return "plain";
 }
 
-// ── accessor shims ──────────────────────────────────────────────────────
-// A table location is {s, p, steps} where steps is a non-empty array of
-// {controlIndex, cellIndex, cellParaIndex} path entries; the LAST entry's
-// controlIndex addresses the table itself (its cellIndex/cellParaIndex are
-// ignored there but the engine's path parser requires all three keys on
-// every entry). Top-level tables (steps.length === 1) use the plain APIs,
-// nested ones the *ByPath APIs.
-
-const isFlat = (loc) => loc.steps.length === 1;
-const flatCtrl = (loc) => loc.steps[0].controlIndex;
-
-function cellPathJson(loc, cellIdx, cellParaIdx = 0) {
-  const steps = loc.steps.slice(0, -1);
-  const last = loc.steps[loc.steps.length - 1];
-  steps.push({ controlIndex: last.controlIndex, cellIndex: cellIdx, cellParaIndex: cellParaIdx });
-  return JSON.stringify(steps);
-}
-
-function tableDims(loc) {
-  const j = isFlat(loc)
-    ? doc.getTableDimensions(loc.s, loc.p, flatCtrl(loc))
-    : doc.getTableDimensionsByPath(loc.s, loc.p, JSON.stringify(loc.steps));
-  return JSON.parse(j);
-}
-function cellInfo(loc, k) {
-  const j = isFlat(loc)
-    ? doc.getCellInfo(loc.s, loc.p, flatCtrl(loc), k)
-    : doc.getCellInfoByPath(loc.s, loc.p, cellPathJson(loc, k));
-  return JSON.parse(j); // {row, col, rowSpan, colSpan}
-}
-function cellParaCount(loc, k) {
-  return isFlat(loc)
-    ? doc.getCellParagraphCount(loc.s, loc.p, flatCtrl(loc), k)
-    : doc.getCellParagraphCountByPath(loc.s, loc.p, cellPathJson(loc, k));
-}
-function cellParaLen(loc, k, cp) {
-  return isFlat(loc)
-    ? doc.getCellParagraphLength(loc.s, loc.p, flatCtrl(loc), k, cp)
-    : doc.getCellParagraphLengthByPath(loc.s, loc.p, cellPathJson(loc, k, cp));
-}
-function cellParaText(loc, k, cp, len) {
-  return isFlat(loc)
-    ? doc.getTextInCell(loc.s, loc.p, flatCtrl(loc), k, cp, 0, len)
-    : doc.getTextInCellByPath(loc.s, loc.p, cellPathJson(loc, k, cp), 0, len);
-}
-
-function readCellText(loc, k) {
-  // A cell holds one or more inner paragraphs; there is no whole-cell text
-  // getter, so read each paragraph and join with newline.
-  let n = 0;
-  try {
-    n = cellParaCount(loc, k);
-  } catch {
-    return "";
-  }
-  const parts = [];
-  for (let cp = 0; cp < n; cp++) {
-    let len = 0;
-    try {
-      len = cellParaLen(loc, k, cp);
-    } catch {
-      len = 0;
-    }
-    parts.push(len > 0 ? cellParaText(loc, k, cp, len) : "");
-  }
-  return parts.join("\n").normalize("NFC");
-}
-
 // ── extraction ──────────────────────────────────────────────────────────
+// Addressing ({s,p,steps}), the accessor shims, cell reading, nested-table
+// discovery and the merge-origin grid rebuild all live in lib/tables.mjs now,
+// shared with the section extractor so there is exactly one implementation of
+// spec rules 1-3.
 
-const tables = []; // output entries, discovery order (parents before children)
+const tables = extractTables(doc, {
+  noNested,
+  maxDepth,
+  fillMerged,
+  // --drop-empty normalizes placeholder/whitespace cell text to "".
+  mapText: dropEmpty ? normalizePlaceholder : undefined,
+});
 
-function extractTable(loc, nestedIn, hostCell, depth) {
-  const index = tables.length;
-  let dim;
-  try {
-    dim = tableDims(loc);
-  } catch (e) {
-    return -1; // not a table / vanished — caller probed speculatively
-  }
-  const entry = {
-    index,
-    section: loc.s,
-    paragraph: loc.p,
-    ...(isFlat(loc) ? { controlIndex: flatCtrl(loc) } : { nestedIn, hostCell }),
-    rowCount: dim.rowCount,
-    colCount: dim.colCount,
-    cellCount: dim.cellCount,
-    grid: null,
-  };
-  tables.push(entry);
-
-  // 1. read every stored cell (origins only — covered positions have none)
-  const cells = [];
-  for (let k = 0; k < dim.cellCount; k++) {
-    let info;
-    try {
-      info = cellInfo(loc, k);
-    } catch {
-      break; // defensive: malformed table — keep what we have
-    }
-    cells.push({ k, ...info, text: readCellText(loc, k), nestedTables: [] });
-  }
-
-  // 2. discover nested tables per cell paragraph (parents-first order)
-  if (!noNested && depth < maxDepth) {
-    for (const c of cells) {
-      let nPara = 0;
-      try {
-        nPara = cellParaCount(loc, c.k);
-      } catch {
-        nPara = 0;
-      }
-      for (let cp = 0; cp < nPara; cp++) {
-        for (let j = 0; j < NESTED_PROBE_MAX; j++) {
-          const steps = loc.steps.slice(0, -1);
-          const last = loc.steps[loc.steps.length - 1];
-          steps.push({ controlIndex: last.controlIndex, cellIndex: c.k, cellParaIndex: cp });
-          steps.push({ controlIndex: j, cellIndex: 0, cellParaIndex: 0 });
-          const childIdx = extractTable(
-            { s: loc.s, p: loc.p, steps },
-            index,
-            { row: c.row, col: c.col },
-            depth + 1,
-          );
-          if (childIdx >= 0) c.nestedTables.push(childIdx);
-        }
-      }
-    }
-  }
-
-  // 3. rebuild the R x C grid from cell addresses + span footprints
-  const grid = Array.from({ length: dim.rowCount }, () => Array(dim.colCount).fill(null));
-  for (const c of cells) {
-    // --drop-empty normalizes placeholder/whitespace cell text to "".
-    const cellText = dropEmpty ? normalizePlaceholder(c.text) : c.text;
-    for (let dr = 0; dr < c.rowSpan; dr++) {
-      for (let dc = 0; dc < c.colSpan; dc++) {
-        const rr = c.row + dr;
-        const cc = c.col + dc;
-        if (rr >= dim.rowCount || cc >= dim.colCount) continue; // clamp malformed spans
-        if (dr === 0 && dc === 0) {
-          grid[rr][cc] = {
-            text: cellText,
-            rowSpan: c.rowSpan,
-            colSpan: c.colSpan,
-            origin: true,
-            ...(c.nestedTables.length ? { nestedTables: c.nestedTables } : {}),
-          };
-        } else {
-          grid[rr][cc] = {
-            text: fillMerged ? cellText : "",
-            origin: false,
-            originRow: c.row,
-            originCol: c.col,
-          };
-        }
-      }
-    }
-  }
-  entry.grid = grid;
-
-  // 4. annotate form type (spec rule 5) — pure annotation, grid unchanged.
-  if (detectFormType) {
-    entry.formType = detectTableFormType(grid, dim.rowCount, dim.colCount);
-  }
-  return index;
-}
-
-// flat scan over every paragraph's controls
-for (let s = 0; s < doc.getSectionCount(); s++) {
-  for (let p = 0; p < doc.getParagraphCount(s); p++) {
-    let ctrlN = 0;
-    try {
-      ctrlN = JSON.parse(doc.getControlTextPositions(s, p)).length;
-    } catch {
-      ctrlN = 0;
-    }
-    // probe EVERY index: tables can sit behind non-table controls, and one
-    // paragraph can host several tables
-    for (let c = 0; c < ctrlN; c++) {
-      extractTable({ s, p, steps: [{ controlIndex: c, cellIndex: 0, cellParaIndex: 0 }] }, null, null, 0);
-    }
+// Annotate form type (spec rule 5) — pure annotation, grid unchanged.
+if (detectFormType) {
+  for (const t of tables) {
+    t.formType = detectTableFormType(t.grid, t.rowCount, t.colCount);
   }
 }
 
@@ -514,35 +314,10 @@ if (format === "json") {
   };
   process.stdout.write(JSON.stringify(out, null, 2) + "\n");
 } else {
-  // markdown
-  const esc = (t) => String(t).replace(/\|/g, "\\|").replace(/\n/g, "<br>");
+  // markdown — rendering lives in lib/render_md.mjs so the section extractor
+  // can splice the same grid inline instead of a placeholder.
   if (!selected.length) process.stdout.write("(no tables)\n");
   for (const t of selected) {
-    const where =
-      t.nestedIn !== undefined && t.nestedIn !== null
-        ? `nested in table ${t.nestedIn}, cell [${t.hostCell.row},${t.hostCell.col}]`
-        : `section ${t.section}, paragraph ${t.paragraph}`;
-    const ft = t.formType ? ` [${t.formType}]` : "";
-    process.stdout.write(`### Table ${t.index} — ${t.rowCount}×${t.colCount} (${where})${ft}\n\n`);
-    // A 1-row table would otherwise render its only data row as a markdown
-    // header; give it an empty header instead so the row stays a body row.
-    if (t.rowCount === 1) {
-      process.stdout.write(`|${"   |".repeat(t.colCount)}\n`);
-      process.stdout.write(`|${" --- |".repeat(t.colCount)}\n`);
-    }
-    for (let r = 0; r < t.rowCount; r++) {
-      const cellsMd = [];
-      for (let c = 0; c < t.colCount; c++) {
-        const cell = t.grid[r][c];
-        let txt = cell ? esc(cell.text) : "";
-        if (cell && cell.origin && cell.nestedTables) {
-          txt += cell.nestedTables.map((n) => ` [nested table #${n}]`).join("");
-        }
-        cellsMd.push(txt);
-      }
-      process.stdout.write(`| ${cellsMd.join(" | ")} |\n`);
-      if (r === 0 && t.rowCount > 1) process.stdout.write(`|${" --- |".repeat(t.colCount)}\n`);
-    }
-    process.stdout.write("\n");
+    process.stdout.write(renderTableMarkdown(t) + "\n");
   }
 }

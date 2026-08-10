@@ -51,17 +51,27 @@
 //
 // All extracted text is NFC-normalized (spec §21). Output goes to stdout.
 
-import { documentHasTable, loadDocument } from "../lib/_bootstrap.mjs";
+import { loadDocument } from "../lib/_bootstrap.mjs";
+import { flag as hasFlag } from "../lib/argv.mjs";
+import {
+  documentHasTable,
+  eachParagraph,
+  paragraphText,
+  tableControlsInParagraph,
+} from "../lib/doc_walk.mjs";
 import { EXIT, fail } from "../lib/exit-codes.mjs";
 import { readMemos } from "../lib/memo.mjs";
+import { flatLoc, readCellText, tableDims } from "../lib/tables.mjs";
 
+// NOTE: this script keeps its own lenient `arg()` rather than lib/argv.mjs'
+// strict strArg. read.mjs validates every option against a closed set right
+// below (--format text|svg, --mode strict|best-effort), so a missing value
+// already exits USAGE with a message naming the valid choices. Switching to
+// strArg would change those messages — a behavior change with no benefit, and
+// test/golden pins them.
 function arg(name, dflt) {
   const i = process.argv.indexOf(name);
   return i >= 0 ? process.argv[i + 1] : dflt;
-}
-
-function hasFlag(name) {
-  return process.argv.includes(name);
 }
 
 // Surface load failures as a clean one-line diagnostic instead of a raw
@@ -74,11 +84,10 @@ async function loadOrExit(path) {
   }
 }
 
-// NFC-normalize all extracted text (spec §21): macOS NFD vs code NFC differ
-// in length for Hangul, so we pin a single normal form on the way out.
-function nfc(s) {
-  return String(s ?? "").normalize("NFC");
-}
+// All extracted text is NFC-normalized (spec §21): macOS NFD vs code NFC
+// differ in length for Hangul, so a single normal form is pinned on the way
+// out. That now happens at the source — doc_walk.paragraphText for body text,
+// tables.readCellText for cell text, memo.readMemos for memo text.
 
 const PLACEHOLDER = "[table: use extract_tables.mjs for data]";
 
@@ -135,66 +144,26 @@ if (mode !== "strict" && mode !== "best-effort") {
   fail(EXIT.USAGE, `unknown --mode: ${mode} (expected strict|best-effort)`);
 }
 
-// ── table control / cell-text helpers (top-level tables only) ─────────────
-// Mirrors extract_tables.mjs' flat-scan accessors. The core read path only
+// ── table flattening (best-effort only, top-level tables) ─────────────────
+// Control enumeration and cell reading live in lib/doc_walk.mjs and
+// lib/tables.mjs, shared with extract_tables.mjs. The core read path only
 // flattens top-level tables in best-effort mode; structured/nested extraction
 // is extract_tables.mjs' job.
-
-// Indices of table controls in paragraph (s,p), in control order.
-function tableControlsInParagraph(doc, s, p) {
-  let n = 0;
-  try {
-    n = JSON.parse(doc.getControlTextPositions(s, p)).length;
-  } catch {
-    n = 0;
-  }
-  const out = [];
-  for (let c = 0; c < n; c++) {
-    try {
-      doc.getTableDimensions(s, p, c);
-      out.push(c);
-    } catch {
-      /* not a table */
-    }
-  }
-  return out;
-}
-
-// Read one cell's text (joins its inner paragraphs with newline). Same shape
-// as extract_tables.mjs' readCellText for flat tables.
-function readCellText(doc, s, p, ctrl, k) {
-  let nPara = 0;
-  try {
-    nPara = doc.getCellParagraphCount(s, p, ctrl, k);
-  } catch {
-    return "";
-  }
-  const parts = [];
-  for (let cp = 0; cp < nPara; cp++) {
-    let len = 0;
-    try {
-      len = doc.getCellParagraphLength(s, p, ctrl, k, cp);
-    } catch {
-      len = 0;
-    }
-    parts.push(len > 0 ? doc.getTextInCell(s, p, ctrl, k, cp, 0, len) : "");
-  }
-  return nfc(parts.join("\n"));
-}
 
 // Flatten a top-level table to document-order cell text (best-effort only).
 // This is the corrupting path the strict mode refuses: cells are emitted in
 // origin order with NO grid reconstruction, so merged cells land wherever
 // they serialize. Lines are written directly to stdout.
 function flattenTableInline(doc, s, p, ctrl) {
+  const loc = flatLoc(s, p, ctrl);
   let dim;
   try {
-    dim = JSON.parse(doc.getTableDimensions(s, p, ctrl));
+    dim = tableDims(doc, loc);
   } catch {
     return;
   }
   for (let k = 0; k < dim.cellCount; k++) {
-    const t = readCellText(doc, s, p, ctrl, k);
+    const t = readCellText(doc, loc, k);
     if (t.length) process.stdout.write(t + "\n");
   }
 }
@@ -244,37 +213,28 @@ if (format === "svg") {
   // Walk every paragraph. A paragraph either hosts table control(s) or holds
   // plain body text — emit accordingly so a table's content is never glued
   // into the body stream by accident.
-  for (let s = 0; s < doc.getSectionCount(); s++) {
-    const P = doc.getParagraphCount(s);
-    for (let p = 0; p < P; p++) {
-      const tableCtrls = tableControlsInParagraph(doc, s, p);
+  for (const { s, p } of eachParagraph(doc)) {
+    const tableCtrls = tableControlsInParagraph(doc, s, p);
 
-      // Body text of the paragraph (present even on table-hosting paragraphs;
-      // a table control sits inline but its text is not in the paragraph body).
-      let body = "";
-      try {
-        body = doc.getTextRange(s, p, 0, 0x7fffffff);
-      } catch {
-        body = "";
-      }
-      body = nfc(body);
+    // Body text of the paragraph (present even on table-hosting paragraphs;
+    // a table control sits inline but its text is not in the paragraph body).
+    const body = paragraphText(doc, s, p);
 
-      if (tableCtrls.length === 0) {
-        // Plain paragraph: emit body text (may be empty → blank line, which
-        // preserves paragraph spacing in the output stream).
-        process.stdout.write(body + "\n");
-        continue;
-      }
+    if (tableCtrls.length === 0) {
+      // Plain paragraph: emit body text (may be empty → blank line, which
+      // preserves paragraph spacing in the output stream).
+      process.stdout.write(body + "\n");
+      continue;
+    }
 
-      // Table-hosting paragraph. Emit any leading body text, then handle each
-      // table per the active mode.
-      if (body.length) process.stdout.write(body + "\n");
-      for (const ctrl of tableCtrls) {
-        if (mode === "strict") {
-          process.stdout.write(PLACEHOLDER + "\n");
-        } else {
-          flattenTableInline(doc, s, p, ctrl);
-        }
+    // Table-hosting paragraph. Emit any leading body text, then handle each
+    // table per the active mode.
+    if (body.length) process.stdout.write(body + "\n");
+    for (const ctrl of tableCtrls) {
+      if (mode === "strict") {
+        process.stdout.write(PLACEHOLDER + "\n");
+      } else {
+        flattenTableInline(doc, s, p, ctrl);
       }
     }
   }
