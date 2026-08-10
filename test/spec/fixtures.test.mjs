@@ -33,7 +33,7 @@ const ROOT = join(HERE, "..", "..");
 const sample = (f) => join(ROOT, "samples", f);
 
 const FIXTURE_SHA256 = {
-  "fixture-headings.hwp": "818a905150f0a1294d15f0940797803fc2e8568bca5fa3e79595f921251207e3",
+  "fixture-headings.hwp": "fa3ee4cc679fc0fdd6f5973072ac9b4b1cc35086095d90da8f70a4cec5036a49",
   "fixture-clause.hwp": "ace0325736a6cce1e566ecbd64c64405022b339b53b1fb1ab2da49c0e3eecb98",
   "fixture-table-only.hwp": "b08b6b66ede3b4ea5c3389b1bcde94dd46b930b206c1b776e4fcc03430884737",
   "fixture-inline.hwp": "99151d0c81552b80932235dba3ab0842e572778b4ee434bdcf9c5e93a96b0729",
@@ -79,7 +79,7 @@ test("fixture-headings: depth is carried by indent, not by style metadata", asyn
 
   const lvl0 = props(byText.get("□ 추진 배경")).marginLeft;
   const lvl1 = props(byText.get("○ 국내 현황")).marginLeft;
-  const lvl2 = props(byText.get("- 시장 규모는 연 12% 성장하고 있다.")).marginLeft;
+  const lvl2 = props(byText.get("- 시장 규모 연 12% 성장")).marginLeft;
   assert.ok(lvl0 < lvl1 && lvl1 < lvl2, `indent must increase: ${lvl0} / ${lvl1} / ${lvl2}`);
 
   // And the metadata a Word-shaped detector would reach for is absent — this

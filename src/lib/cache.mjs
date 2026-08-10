@@ -41,7 +41,14 @@ export const CACHE_ROOT = join(tmpdir(), "hwp-skill-cache");
 // Bump when the shape or content of a cached model changes. Each is separate
 // so a renderer change does not invalidate entries a detector-only consumer
 // could still use.
-export const DETECTOR_VERSION = 1;
+//
+// This is the ONE part of the key that a human has to maintain, and forgetting
+// it looks exactly like a bug: during development, adding a field to the model
+// left older entries addressable, so a cached run kept reporting the model
+// without it. The file digest cannot catch that — the document did not change,
+// the code did.
+// 2: the model carries structureAgreement + sourceFormat.
+export const DETECTOR_VERSION = 2;
 export const RENDER_VERSION = 1;
 export const EQN_VERSION = 1;
 export const TABLE_RENDER_VERSION = 1;

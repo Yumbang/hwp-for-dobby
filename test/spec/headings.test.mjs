@@ -65,6 +65,16 @@ const rejectedBy = (res, id) => res.detection.rejected.filter((r) => r.filter ==
 const headingFixture = () => build(FIXTURE_DATA.HEADING_LINES);
 const clauseFixture = () => build(FIXTURE_DATA.CLAUSE_LINES);
 
+// Resolve a fixture line to its block index BY TEXT. Hard-coded indices look
+// tidy until a line is added to the fixture and every number below it silently
+// means a different paragraph — the assertions still pass or fail, just about
+// the wrong lines. Throws on a miss so a renamed line is a loud failure.
+function at(text, lines = FIXTURE_DATA.HEADING_LINES) {
+  const i = lines.findIndex(([t]) => t === text);
+  if (i < 0) throw new Error(`fixture line not found: ${JSON.stringify(text)}`);
+  return i;
+}
+
 // A 학칙: three clause headings, two □ items that WOULD give the marker
 // strategy a tree, and the amendment history that destroys one.
 const HAKCHIK = [
@@ -93,10 +103,14 @@ test("the TOC twin is rejected and the heading twin survives, in the same docume
 
   const heading = res.nodes.filter((n) => n.title === "1. 사업 개요");
   assert.equal(heading.length, 1, "the heading twin must be found exactly once");
-  assert.equal(heading[0].blockIndex, 9, "…and it must be the one at paragraph 9, not paragraph 2");
+  assert.equal(
+    heading[0].blockIndex,
+    at("1. 사업 개요"),
+    "…and it must be the standalone one, not the table-of-contents line",
+  );
   assert.ok(
-    !res.nodes.some((n) => n.blockIndex === 2),
-    "paragraph 2 is a table-of-contents line and must never be a heading",
+    !res.nodes.some((n) => n.blockIndex === at("1. 사업 개요\t 2")),
+    "the table-of-contents line must never be a heading",
   );
   assert.equal(filterCount(res, "F2"), 3, "all three TOC lines are rejected");
 });
@@ -104,11 +118,13 @@ test("the TOC twin is rejected and the heading twin survives, in the same docume
 test("fixture-headings: marker depth builds an ordinal tree", () => {
   const res = detectHeadings(headingFixture().blocks);
   assert.equal(res.strategy, "marker");
-  assert.deepEqual(res.detection.levels, { NUM1: 1, BOX: 2, CIRCLE: 3 });
+  assert.deepEqual(res.detection.levels, { NUM1: 1, BOX: 2, CIRCLE: 3, DASH: 4 });
   assert.deepEqual(ids(res), [
     "1 1. 사업 개요",
     "1.1 □ 추진 배경",
     "1.1.1 ○ 국내 현황",
+    "1.1.1.1 - 시장 규모 연 12% 성장",
+    "1.1.1.2 - 주요 사업자 현황",
     "1.1.2 ○ 해외 현황",
     "1.2 □ 추진 목표",
     "2 2. 추진 체계",
@@ -181,11 +197,11 @@ test("F4 rejects a table caption sitting between two real headings", () => {
   const res = detectHeadings(headingFixture().blocks);
   assert.deepEqual(
     rejectedBy(res, "F4").map((r) => r.index),
-    [14],
+    [at("<표 1-1> 연도별 시장 규모")],
   );
   // Its neighbours — the ○ above it and the □ below — are unharmed.
-  assert.ok(res.nodes.some((n) => n.blockIndex === 13));
-  assert.ok(res.nodes.some((n) => n.blockIndex === 15));
+  assert.ok(res.nodes.some((n) => n.blockIndex === at("○ 해외 현황")));
+  assert.ok(res.nodes.some((n) => n.blockIndex === at("□ 추진 목표")));
 });
 
 test("F5 rejects footnote and source apparatus, not every leading star", () => {
@@ -220,11 +236,16 @@ test("F6 refuses a table cell even though the contract says it can never arrive"
 test("F7 rejects a sentence wearing a bullet", () => {
   const res = detectHeadings(headingFixture().blocks);
   const hits = rejectedBy(res, "F7").map((r) => r.index);
-  // paragraph 12 "- 시장 규모는 연 12% 성장하고 있다.", 21 "* 각주 성격의 …
-  // 아니다.", 22 "※ … 있음."
-  assert.deepEqual(hits, [12, 21, 22]);
-  assert.ok(res.nodes.some((n) => n.blockIndex === 11), "the ○ above it survives");
-  assert.ok(res.nodes.some((n) => n.blockIndex === 13), "and the ○ below it too");
+  // The two marker-bearing lines in the fixture that end like sentences: the
+  // "*" footnote apparatus and the "※" note. Both wear a marker a naive
+  // detector would accept.
+  assert.deepEqual(hits, [
+    at("* 각주 성격의 보충 설명이며 항목이 아니다."),
+    at("※ 유의사항: 본 계획은 변경될 수 있음."),
+  ]);
+  // The real headings on either side of them are untouched.
+  assert.ok(res.nodes.some((n) => n.blockIndex === at("3. 기대 효과")));
+  assert.ok(res.nodes.some((n) => n.blockIndex === at("- 시장 규모 연 12% 성장")));
 });
 
 test("F7 does not touch an inline clause heading, whose body always ends in -다", () => {

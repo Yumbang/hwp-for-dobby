@@ -83,17 +83,19 @@ const HEADING_LINES = [
   ["1. 사업 개요", 0], //  9  ✓ heading — the twin of paragraph 2
   ["□ 추진 배경", 0], // 10  ✓ heading
   ["○ 국내 현황", 1], // 11  ✓ heading
-  ["- 시장 규모는 연 12% 성장하고 있다.", 2], // 12  ✓ heading
-  ["○ 해외 현황", 1], // 13  ✓ heading
-  ["<표 1-1> 연도별 시장 규모", 1], // 14  ✗ table caption
-  ["□ 추진 목표", 0], // 15  ✓ heading
-  ["본 사업은 제3조에 따라 추진하며, 세부 사항은 1. 항목을 참고한다.", 1], // 16  ✗ cross-reference (inline, mid-sentence)
-  ["2. 추진 체계", 0], // 17  ✓ heading
-  ["□ 조직 구성", 0], // 18  ✓ heading
-  ["○ 총괄 부서", 1], // 19  ✓ heading
-  ["3. 기대 효과", 0], // 20  ✓ heading
-  ["* 각주 성격의 보충 설명이며 항목이 아니다.", 0], // 21  ✗ footnote-style marker
-  ["※ 유의사항: 본 계획은 변경될 수 있음.", 0], // 22  ✗ ※ note marker
+  ["- 시장 규모 연 12% 성장", 2], // 12  ✓ heading (third marker level)
+  ["국내 시장 규모는 연 12% 성장하고 있다.", 2], // 13  ✗ body text under it
+  ["- 주요 사업자 현황", 2], // 14  ✓ heading (same class, so DASH has support)
+  ["○ 해외 현황", 1], // 15  ✓ heading
+  ["<표 1-1> 연도별 시장 규모", 1], // 16  ✗ table caption
+  ["□ 추진 목표", 0], // 17  ✓ heading
+  ["본 사업은 제3조에 따라 추진하며, 세부 사항은 1. 항목을 참고한다.", 1], // 18  ✗ cross-reference (inline, mid-sentence)
+  ["2. 추진 체계", 0], // 19  ✓ heading
+  ["□ 조직 구성", 0], // 20  ✓ heading
+  ["○ 총괄 부서", 1], // 21  ✓ heading
+  ["3. 기대 효과", 0], // 22  ✓ heading
+  ["* 각주 성격의 보충 설명이며 항목이 아니다.", 0], // 23  ✗ footnote-style marker
+  ["※ 유의사항: 본 계획은 변경될 수 있음.", 0], // 24  ✗ ※ note marker
 ];
 
 // ── fixture-clause.hwp ─────────────────────────────────────────────────────
