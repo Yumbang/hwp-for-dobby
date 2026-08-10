@@ -52,6 +52,44 @@ test("identity: the skill name is a valid Claude Code skill directory name", () 
   assert.ok(SKILL.length <= 64);
 });
 
+// The frontmatter `description:` is what the model reads to decide whether to
+// load this skill at all, and it has a HARD 1024-character ceiling. Crossing it
+// is silent in the worst way: the skill still looks fine in the repo, and the
+// validator either rejects the upload or truncates the text — so the triggers
+// at the END of the description (here: the "NOT for .docx" routing) are the
+// first thing lost, and the skill starts answering questions that belong to
+// another skill. This already happened once: expanding the triggers for the
+// section work pushed it to 1433 characters.
+const DESCRIPTION_MAX = 1024;
+
+test("identity: the frontmatter description fits the 1024-character ceiling", () => {
+  const src = readFileSync(join(ROOT, "SKILL.md"), "utf8");
+  const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(src);
+  assert.ok(fm, "SKILL.md must open with YAML frontmatter");
+  const m = /^description:\s*"([\s\S]*?)"\s*$/m.exec(fm[1]);
+  assert.ok(m, "frontmatter must carry a quoted description:");
+  const description = m[1];
+  assert.ok(
+    description.length <= DESCRIPTION_MAX,
+    `SKILL.md description is ${description.length} chars, ${description.length - DESCRIPTION_MAX} over the ${DESCRIPTION_MAX} limit — it will be rejected or truncated, and truncation silently eats the routing rules at the end`,
+  );
+  // A description that shrank to nothing routes nothing.
+  assert.ok(description.length > 200, "the description is too short to route reliably");
+});
+
+test("identity: the description still carries the routing it needs", () => {
+  const src = readFileSync(join(ROOT, "SKILL.md"), "utf8");
+  const description = /^description:\s*"([\s\S]*?)"\s*$/m.exec(src)[1];
+  // Trimming for length must not quietly drop a whole capability's triggers.
+  for (const trigger of [".hwp", ".hwpx", "한글", "신청서", "section", "목차", "diff", "변경 내용 추적"]) {
+    assert.ok(description.includes(trigger), `the description no longer mentions "${trigger}"`);
+  }
+  // …and must keep steering the neighbouring formats away.
+  for (const away of [".docx", ".xlsx", ".pptx", ".pdf"]) {
+    assert.ok(description.includes(away), `the description no longer routes ${away} elsewhere`);
+  }
+});
+
 test("identity: SKILL.md frontmatter is the only place the name is defined", () => {
   // A second hardcoded copy is how the installer and the frontmatter drift.
   for (const rel of ["scripts/install-skill.mjs", "scripts/build.mjs"]) {
