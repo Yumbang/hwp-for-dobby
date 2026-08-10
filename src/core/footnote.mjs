@@ -45,6 +45,7 @@ import { loadDocument } from "../lib/_bootstrap.mjs";
 import { exportVerify } from "../lib/verify.mjs";
 import { EXIT, fail } from "../lib/exit-codes.mjs";
 import { assertMemoSafe } from "../lib/memo.mjs";
+import { assertTrackChangeSafe } from "../lib/trackchange.mjs";
 
 const USAGE =
   "usage: footnote.mjs <input> --op insert|delete --section N --paragraph N\n" +
@@ -121,6 +122,10 @@ function countFootnotes(doc) {
 // Refuse a memo-bearing input (the engine drops memos on save) unless the
 // caller passed --allow-memo-loss. No-op on memo-free inputs.
 assertMemoSafe(input, process.argv);
+// Same contract for tracked changes (변경 내용 추적): the engine does not model
+// them either, so an edit destroys every recorded change AND the original text
+// each deletion still holds. Override: --allow-trackchange-loss.
+assertTrackChangeSafe(input, process.argv);
 
 // --- load -------------------------------------------------------------------
 let doc;

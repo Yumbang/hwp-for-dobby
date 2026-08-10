@@ -3,8 +3,13 @@
 //   node src/core/read.mjs <input.hwp|.hwpx> [--format text|svg] [--page N|all]
 //                                            [--mode strict|best-effort]
 //   node src/core/read.mjs <input.hwp|.hwpx> --memos [--format text|json]
+//   node src/core/read.mjs <input.hwp|.hwpx> --track-changes [--format text|json]
 //
 // Default: --format text --page all --mode strict.
+//
+// (--track-changes is intentionally absent from the USAGE string below: that
+// string is pinned byte-for-byte by test/golden, and re-recording the baseline
+// is a separate, reviewed act. Documented here instead.)
 //
 // MEMOS (--memos): the rhwp engine does NOT model document memos (메모/주석
 // comment annotations) — they live only in the container and are silently
@@ -12,6 +17,14 @@
 // guard (assertMemoSafe) points users here to read them first. With --memos we
 // bypass body-text extraction entirely and print the memos read straight from
 // the container: JSON by default, or "[N] <text>" blocks with --format text.
+//
+// TRACKED CHANGES (--track-changes): the same story, one degree worse. In a
+// document with tracked changes (변경 내용 추적) the DELETED text is still
+// physically present in the paragraph records, so the body text printed by a
+// plain read silently MIXES insertions and deletions — the reader sees text the
+// author already removed and cannot tell. --track-changes lists the changes
+// (kind / author / covered text) from the container; a plain read emits a
+// stderr WARNING when, and only when, the document actually has them.
 //
 // CORE TIER — WASM ONLY. This script runs entirely in-process through the
 // vendored @rhwp/core WASM bundle and behaves identically on claude.ai /
@@ -62,6 +75,7 @@ import {
 import { EXIT, fail } from "../lib/exit-codes.mjs";
 import { readMemos } from "../lib/memo.mjs";
 import { flatLoc, readCellText, tableDims } from "../lib/tables.mjs";
+import { detectTrackChanges, readTrackChanges } from "../lib/trackchange.mjs";
 
 // NOTE: this script keeps its own lenient `arg()` rather than lib/argv.mjs'
 // strict strArg. read.mjs validates every option against a closed set right
@@ -130,6 +144,54 @@ if (hasFlag("--memos")) {
   process.exit(EXIT.OK);
 }
 
+// ── TRACKED CHANGES ─────────────────────────────────────────────────────────
+// --track-changes short-circuits the read path exactly as --memos does: no
+// WASM, no body walk, just the container (lib/trackchange.mjs). This is the
+// command the write guard (assertTrackChangeSafe) points at, and the only way
+// to see WHICH spans of the body are insertions and which are deletions the
+// author already made — a plain read prints both as ordinary text.
+if (hasFlag("--track-changes")) {
+  const tcFormat = arg("--format", "json");
+  if (tcFormat !== "json" && tcFormat !== "text") {
+    fail(EXIT.USAGE, `unknown --format for --track-changes: ${tcFormat} (expected json|text)`);
+  }
+  let info;
+  let changes;
+  try {
+    info = detectTrackChanges(inputPath);
+    changes = readTrackChanges(inputPath);
+  } catch (e) {
+    fail(EXIT.LOAD, `error: cannot read ${inputPath}: ${e?.message ?? e}`);
+  }
+  // An unscannable container (HWPX today) must NEVER be reported as "no tracked
+  // changes" — that is the silent lie lib/trackchange.mjs exists to avoid. Say
+  // we could not look, and still exit 0: this is a read, not a failure.
+  if (!info.supported) {
+    process.stderr.write(
+      `WARNING: cannot scan this container (format: ${info.format}) for tracked changes ` +
+        `(변경 내용 추적).\n` +
+        `         The result below means "not checked", NOT "none found".\n`,
+    );
+  }
+  if (tcFormat === "json") {
+    // The whole verdict, not a bare array: `supported`, `flagBit` and
+    // `corroborated` are what let a caller tell "none" from "could not look".
+    process.stdout.write(JSON.stringify({ ...info, changes }, null, 2) + "\n");
+  } else if (!info.supported) {
+    process.stdout.write("(tracked changes NOT CHECKED: this container cannot be scanned)\n");
+  } else if (changes.length === 0) {
+    process.stdout.write("(no tracked changes)\n");
+  } else {
+    process.stdout.write(`─── 변경 내용 추적 / tracked changes (${changes.length}) ───\n`);
+    for (const ch of changes) {
+      const who = ch.author ? ` by ${ch.author}` : "";
+      process.stdout.write(`[${ch.index}] ${ch.kind} #${ch.id}${who} (${ch.location})\n`);
+      if (ch.text) process.stdout.write(`      ${JSON.stringify(ch.text)}\n`);
+    }
+  }
+  process.exit(EXIT.OK);
+}
+
 const format = arg("--format", "text");
 const pageArg = arg("--page", "all");
 const mode = arg("--mode", "strict");
@@ -185,6 +247,37 @@ if (format === "svg") {
   for (const pg of pages) process.stdout.write(doc.renderPageSvg(pg));
 } else {
   // ── TEXT ──────────────────────────────────────────────────────────────
+  // Tracked changes (변경 내용 추적). Deleted text is still physically present in
+  // the paragraph records, so everything printed below MIXES insertions and
+  // deletions with nothing to tell them apart. Warn BEFORE the body, because
+  // the caveat is worthless after the reader has already believed the text —
+  // and before the engine load, because the detection reads the container
+  // directly and does not depend on the engine accepting the file.
+  //
+  // ONLY when the document actually has them. A clean document's stdout AND
+  // stderr are pinned byte-for-byte by test/golden — this branch must stay
+  // completely silent otherwise, which is also why the detection is guarded:
+  // a scan failure (missing file, HWP3, …) degrades to "say nothing", never to
+  // a spurious warning ahead of the load error that is about to be printed.
+  let tracked = null;
+  try {
+    tracked = detectTrackChanges(inputPath);
+  } catch {
+    tracked = null;
+  }
+  if (tracked?.hasTrackChanges) {
+    const c = tracked.counts;
+    process.stderr.write(
+      "WARNING: this document has TRACKED CHANGES (변경 내용 추적): " +
+        `${c.insert} insertion(s), ${c.delete} deletion(s).\n` +
+        "         The rhwp engine does not model them, so the text below is the RAW body:\n" +
+        "         text the author DELETED is still in it and is printed as if it were live.\n" +
+        "         Do not treat this output as the document's final text.\n" +
+        "         To see which spans are insertions and which are deletions:\n" +
+        `           node src/core/read.mjs "${inputPath}" --track-changes\n`,
+    );
+  }
+
   const doc = await loadOrExit(inputPath);
   const hasTable = documentHasTable(doc);
 
