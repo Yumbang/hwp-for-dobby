@@ -39,6 +39,7 @@
 import { loadDocument } from "../lib/_bootstrap.mjs";
 import { EXIT, fail } from "../lib/exit-codes.mjs";
 import { assertMemoSafe } from "../lib/memo.mjs";
+import { assertTrackChangeSafe } from "../lib/trackchange.mjs";
 import { exportVerify } from "../lib/verify.mjs";
 
 const USAGE = "usage: unlock.mjs <input.hwp|.hwpx> --output <out.hwp>";
@@ -59,6 +60,10 @@ for (let i = 2; i < process.argv.length; i++) {
     process.exit(EXIT.OK);
   } else if (a === "--output") {
     i++; // value consumed by arg() above
+  } else if (a === "--allow-trackchange-loss") {
+    // A bare boolean, read straight from process.argv by assertTrackChangeSafe
+    // (lib/trackchange.mjs). Named here only so this script's strict parser does
+    // not reject the guard's own documented override as an unknown option.
   } else if (a.startsWith("-")) {
     fail(EXIT.USAGE, `error: unknown option ${a}\n${USAGE}`);
   } else if (inputPath === null) {
@@ -74,6 +79,10 @@ if (!inputPath || !output) {
 // Refuse a memo-bearing input (the engine drops memos on save) unless the
 // caller passed --allow-memo-loss. No-op on memo-free inputs.
 assertMemoSafe(inputPath, process.argv);
+// Same contract for tracked changes (변경 내용 추적): the engine does not model
+// them either, so an edit destroys every recorded change AND the original text
+// each deletion still holds. Override: --allow-trackchange-loss.
+assertTrackChangeSafe(inputPath, process.argv);
 
 let doc;
 try {

@@ -3,8 +3,13 @@
 //   node src/core/read.mjs <input.hwp|.hwpx> [--format text|svg] [--page N|all]
 //                                            [--mode strict|best-effort]
 //   node src/core/read.mjs <input.hwp|.hwpx> --memos [--format text|json]
+//   node src/core/read.mjs <input.hwp|.hwpx> --track-changes [--format text|json]
 //
 // Default: --format text --page all --mode strict.
+//
+// (--track-changes is intentionally absent from the USAGE string below: that
+// string is pinned byte-for-byte by test/golden, and re-recording the baseline
+// is a separate, reviewed act. Documented here instead.)
 //
 // MEMOS (--memos): the rhwp engine does NOT model document memos (메모/주석
 // comment annotations) — they live only in the container and are silently
@@ -12,6 +17,14 @@
 // guard (assertMemoSafe) points users here to read them first. With --memos we
 // bypass body-text extraction entirely and print the memos read straight from
 // the container: JSON by default, or "[N] <text>" blocks with --format text.
+//
+// TRACKED CHANGES (--track-changes): the same story, one degree worse. In a
+// document with tracked changes (변경 내용 추적) the DELETED text is still
+// physically present in the paragraph records, so the body text printed by a
+// plain read silently MIXES insertions and deletions — the reader sees text the
+// author already removed and cannot tell. --track-changes lists the changes
+// (kind / author / covered text) from the container; a plain read emits a
+// stderr WARNING when, and only when, the document actually has them.
 //
 // CORE TIER — WASM ONLY. This script runs entirely in-process through the
 // vendored @rhwp/core WASM bundle and behaves identically on claude.ai /
@@ -51,17 +64,28 @@
 //
 // All extracted text is NFC-normalized (spec §21). Output goes to stdout.
 
-import { documentHasTable, loadDocument } from "../lib/_bootstrap.mjs";
+import { loadDocument } from "../lib/_bootstrap.mjs";
+import { flag as hasFlag } from "../lib/argv.mjs";
+import {
+  documentHasTable,
+  eachParagraph,
+  paragraphText,
+  tableControlsInParagraph,
+} from "../lib/doc_walk.mjs";
 import { EXIT, fail } from "../lib/exit-codes.mjs";
 import { readMemos } from "../lib/memo.mjs";
+import { flatLoc, readCellText, tableDims } from "../lib/tables.mjs";
+import { detectTrackChanges, readTrackChanges } from "../lib/trackchange.mjs";
 
+// NOTE: this script keeps its own lenient `arg()` rather than lib/argv.mjs'
+// strict strArg. read.mjs validates every option against a closed set right
+// below (--format text|svg, --mode strict|best-effort), so a missing value
+// already exits USAGE with a message naming the valid choices. Switching to
+// strArg would change those messages — a behavior change with no benefit, and
+// test/golden pins them.
 function arg(name, dflt) {
   const i = process.argv.indexOf(name);
   return i >= 0 ? process.argv[i + 1] : dflt;
-}
-
-function hasFlag(name) {
-  return process.argv.includes(name);
 }
 
 // Surface load failures as a clean one-line diagnostic instead of a raw
@@ -74,11 +98,10 @@ async function loadOrExit(path) {
   }
 }
 
-// NFC-normalize all extracted text (spec §21): macOS NFD vs code NFC differ
-// in length for Hangul, so we pin a single normal form on the way out.
-function nfc(s) {
-  return String(s ?? "").normalize("NFC");
-}
+// All extracted text is NFC-normalized (spec §21): macOS NFD vs code NFC
+// differ in length for Hangul, so a single normal form is pinned on the way
+// out. That now happens at the source — doc_walk.paragraphText for body text,
+// tables.readCellText for cell text, memo.readMemos for memo text.
 
 const PLACEHOLDER = "[table: use extract_tables.mjs for data]";
 
@@ -121,6 +144,54 @@ if (hasFlag("--memos")) {
   process.exit(EXIT.OK);
 }
 
+// ── TRACKED CHANGES ─────────────────────────────────────────────────────────
+// --track-changes short-circuits the read path exactly as --memos does: no
+// WASM, no body walk, just the container (lib/trackchange.mjs). This is the
+// command the write guard (assertTrackChangeSafe) points at, and the only way
+// to see WHICH spans of the body are insertions and which are deletions the
+// author already made — a plain read prints both as ordinary text.
+if (hasFlag("--track-changes")) {
+  const tcFormat = arg("--format", "json");
+  if (tcFormat !== "json" && tcFormat !== "text") {
+    fail(EXIT.USAGE, `unknown --format for --track-changes: ${tcFormat} (expected json|text)`);
+  }
+  let info;
+  let changes;
+  try {
+    info = detectTrackChanges(inputPath);
+    changes = readTrackChanges(inputPath);
+  } catch (e) {
+    fail(EXIT.LOAD, `error: cannot read ${inputPath}: ${e?.message ?? e}`);
+  }
+  // An unscannable container (HWPX today) must NEVER be reported as "no tracked
+  // changes" — that is the silent lie lib/trackchange.mjs exists to avoid. Say
+  // we could not look, and still exit 0: this is a read, not a failure.
+  if (!info.supported) {
+    process.stderr.write(
+      `WARNING: cannot scan this container (format: ${info.format}) for tracked changes ` +
+        `(변경 내용 추적).\n` +
+        `         The result below means "not checked", NOT "none found".\n`,
+    );
+  }
+  if (tcFormat === "json") {
+    // The whole verdict, not a bare array: `supported`, `flagBit` and
+    // `corroborated` are what let a caller tell "none" from "could not look".
+    process.stdout.write(JSON.stringify({ ...info, changes }, null, 2) + "\n");
+  } else if (!info.supported) {
+    process.stdout.write("(tracked changes NOT CHECKED: this container cannot be scanned)\n");
+  } else if (changes.length === 0) {
+    process.stdout.write("(no tracked changes)\n");
+  } else {
+    process.stdout.write(`─── 변경 내용 추적 / tracked changes (${changes.length}) ───\n`);
+    for (const ch of changes) {
+      const who = ch.author ? ` by ${ch.author}` : "";
+      process.stdout.write(`[${ch.index}] ${ch.kind} #${ch.id}${who} (${ch.location})\n`);
+      if (ch.text) process.stdout.write(`      ${JSON.stringify(ch.text)}\n`);
+    }
+  }
+  process.exit(EXIT.OK);
+}
+
 const format = arg("--format", "text");
 const pageArg = arg("--page", "all");
 const mode = arg("--mode", "strict");
@@ -135,66 +206,26 @@ if (mode !== "strict" && mode !== "best-effort") {
   fail(EXIT.USAGE, `unknown --mode: ${mode} (expected strict|best-effort)`);
 }
 
-// ── table control / cell-text helpers (top-level tables only) ─────────────
-// Mirrors extract_tables.mjs' flat-scan accessors. The core read path only
+// ── table flattening (best-effort only, top-level tables) ─────────────────
+// Control enumeration and cell reading live in lib/doc_walk.mjs and
+// lib/tables.mjs, shared with extract_tables.mjs. The core read path only
 // flattens top-level tables in best-effort mode; structured/nested extraction
 // is extract_tables.mjs' job.
-
-// Indices of table controls in paragraph (s,p), in control order.
-function tableControlsInParagraph(doc, s, p) {
-  let n = 0;
-  try {
-    n = JSON.parse(doc.getControlTextPositions(s, p)).length;
-  } catch {
-    n = 0;
-  }
-  const out = [];
-  for (let c = 0; c < n; c++) {
-    try {
-      doc.getTableDimensions(s, p, c);
-      out.push(c);
-    } catch {
-      /* not a table */
-    }
-  }
-  return out;
-}
-
-// Read one cell's text (joins its inner paragraphs with newline). Same shape
-// as extract_tables.mjs' readCellText for flat tables.
-function readCellText(doc, s, p, ctrl, k) {
-  let nPara = 0;
-  try {
-    nPara = doc.getCellParagraphCount(s, p, ctrl, k);
-  } catch {
-    return "";
-  }
-  const parts = [];
-  for (let cp = 0; cp < nPara; cp++) {
-    let len = 0;
-    try {
-      len = doc.getCellParagraphLength(s, p, ctrl, k, cp);
-    } catch {
-      len = 0;
-    }
-    parts.push(len > 0 ? doc.getTextInCell(s, p, ctrl, k, cp, 0, len) : "");
-  }
-  return nfc(parts.join("\n"));
-}
 
 // Flatten a top-level table to document-order cell text (best-effort only).
 // This is the corrupting path the strict mode refuses: cells are emitted in
 // origin order with NO grid reconstruction, so merged cells land wherever
 // they serialize. Lines are written directly to stdout.
 function flattenTableInline(doc, s, p, ctrl) {
+  const loc = flatLoc(s, p, ctrl);
   let dim;
   try {
-    dim = JSON.parse(doc.getTableDimensions(s, p, ctrl));
+    dim = tableDims(doc, loc);
   } catch {
     return;
   }
   for (let k = 0; k < dim.cellCount; k++) {
-    const t = readCellText(doc, s, p, ctrl, k);
+    const t = readCellText(doc, loc, k);
     if (t.length) process.stdout.write(t + "\n");
   }
 }
@@ -216,6 +247,37 @@ if (format === "svg") {
   for (const pg of pages) process.stdout.write(doc.renderPageSvg(pg));
 } else {
   // ── TEXT ──────────────────────────────────────────────────────────────
+  // Tracked changes (변경 내용 추적). Deleted text is still physically present in
+  // the paragraph records, so everything printed below MIXES insertions and
+  // deletions with nothing to tell them apart. Warn BEFORE the body, because
+  // the caveat is worthless after the reader has already believed the text —
+  // and before the engine load, because the detection reads the container
+  // directly and does not depend on the engine accepting the file.
+  //
+  // ONLY when the document actually has them. A clean document's stdout AND
+  // stderr are pinned byte-for-byte by test/golden — this branch must stay
+  // completely silent otherwise, which is also why the detection is guarded:
+  // a scan failure (missing file, HWP3, …) degrades to "say nothing", never to
+  // a spurious warning ahead of the load error that is about to be printed.
+  let tracked = null;
+  try {
+    tracked = detectTrackChanges(inputPath);
+  } catch {
+    tracked = null;
+  }
+  if (tracked?.hasTrackChanges) {
+    const c = tracked.counts;
+    process.stderr.write(
+      "WARNING: this document has TRACKED CHANGES (변경 내용 추적): " +
+        `${c.insert} insertion(s), ${c.delete} deletion(s).\n` +
+        "         The rhwp engine does not model them, so the text below is the RAW body:\n" +
+        "         text the author DELETED is still in it and is printed as if it were live.\n" +
+        "         Do not treat this output as the document's final text.\n" +
+        "         To see which spans are insertions and which are deletions:\n" +
+        `           node src/core/read.mjs "${inputPath}" --track-changes\n`,
+    );
+  }
+
   const doc = await loadOrExit(inputPath);
   const hasTable = documentHasTable(doc);
 
@@ -244,37 +306,28 @@ if (format === "svg") {
   // Walk every paragraph. A paragraph either hosts table control(s) or holds
   // plain body text — emit accordingly so a table's content is never glued
   // into the body stream by accident.
-  for (let s = 0; s < doc.getSectionCount(); s++) {
-    const P = doc.getParagraphCount(s);
-    for (let p = 0; p < P; p++) {
-      const tableCtrls = tableControlsInParagraph(doc, s, p);
+  for (const { s, p } of eachParagraph(doc)) {
+    const tableCtrls = tableControlsInParagraph(doc, s, p);
 
-      // Body text of the paragraph (present even on table-hosting paragraphs;
-      // a table control sits inline but its text is not in the paragraph body).
-      let body = "";
-      try {
-        body = doc.getTextRange(s, p, 0, 0x7fffffff);
-      } catch {
-        body = "";
-      }
-      body = nfc(body);
+    // Body text of the paragraph (present even on table-hosting paragraphs;
+    // a table control sits inline but its text is not in the paragraph body).
+    const body = paragraphText(doc, s, p);
 
-      if (tableCtrls.length === 0) {
-        // Plain paragraph: emit body text (may be empty → blank line, which
-        // preserves paragraph spacing in the output stream).
-        process.stdout.write(body + "\n");
-        continue;
-      }
+    if (tableCtrls.length === 0) {
+      // Plain paragraph: emit body text (may be empty → blank line, which
+      // preserves paragraph spacing in the output stream).
+      process.stdout.write(body + "\n");
+      continue;
+    }
 
-      // Table-hosting paragraph. Emit any leading body text, then handle each
-      // table per the active mode.
-      if (body.length) process.stdout.write(body + "\n");
-      for (const ctrl of tableCtrls) {
-        if (mode === "strict") {
-          process.stdout.write(PLACEHOLDER + "\n");
-        } else {
-          flattenTableInline(doc, s, p, ctrl);
-        }
+    // Table-hosting paragraph. Emit any leading body text, then handle each
+    // table per the active mode.
+    if (body.length) process.stdout.write(body + "\n");
+    for (const ctrl of tableCtrls) {
+      if (mode === "strict") {
+        process.stdout.write(PLACEHOLDER + "\n");
+      } else {
+        flattenTableInline(doc, s, p, ctrl);
       }
     }
   }

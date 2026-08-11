@@ -1,5 +1,5 @@
 {
-  "name": "hwp-skill",
+  "name": "hwp-for-dobby",
   "version": "0.1.0",
   "description": "AI-agent skill for viewing and editing HWP/HWPX (Korean Hangul) documents via the rhwp engine",
   "private": true,

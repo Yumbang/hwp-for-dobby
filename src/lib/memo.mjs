@@ -9,7 +9,9 @@
 // and every memo in it is silently dropped. (Verified on real files 2026-06.)
 //
 // The engine exposes no memo API, so we detect memos by reading the container
-// ourselves, with zero dependencies (works on every platform / the WASM tier):
+// ourselves, with zero dependencies (works on every platform / the WASM tier).
+// The container plumbing — CFB, the record walker, PARA_TEXT decoding, the ZIP
+// reader — now lives in lib/hwp5.mjs, shared with lib/trackchange.mjs:
 //   • HWP5  (.hwp)  = OLE/CFB compound file → inflate each BodyText/SectionN
 //                     stream → count HWPTAG_MEMO_LIST (93) records.
 //   • HWPX  (.hwpx) = ZIP → inflate Contents/section*.xml → count <hp:memo ...>.
@@ -19,169 +21,37 @@
 // silent data loss without the user's explicit consent.
 
 import { readFileSync } from "node:fs";
-import { inflateRawSync } from "node:zlib";
 import { EXIT, fail } from "./exit-codes.mjs";
+import {
+  HWPX_CONTENT_PART,
+  INLINE8,
+  TAG,
+  containerFormat,
+  decodeParaText,
+  indexOfUtf16,
+  isCfb,
+  isZip,
+  readCfbStreamsByName,
+  readZipEntries,
+  sectionStreams,
+  walkRecords,
+} from "./hwp5.mjs";
 
-const HWPTAG_BEGIN = 0x10;
-const HWPTAG_MEMO_LIST = HWPTAG_BEGIN + 77; // 93
-const HWPTAG_PARA_TEXT = HWPTAG_BEGIN + 51; // 67
-const HWPTAG_CTRL_HEADER = HWPTAG_BEGIN + 55; // 71
-
-// Find the byte offset of `s` encoded UTF-16LE in `buf` (-1 if absent).
-function indexOfUtf16(buf, s) {
-  return buf.indexOf(Buffer.from(s, "utf16le"));
-}
+const HWPTAG_MEMO_LIST = TAG.MEMO_LIST; // 93
+const HWPTAG_PARA_TEXT = TAG.PARA_TEXT; // 67
+const HWPTAG_CTRL_HEADER = TAG.CTRL_HEADER; // 71
 
 // ── HWP5 / CFB ───────────────────────────────────────────────────────────────
-
-const CFB_SIG_LO = 0xe011cfd0; // bytes D0 CF 11 E0 (LE u32)
-const CFB_SIG_HI = 0xe11ab1a1; // bytes A1 B1 1A E1 (LE u32)
-const ENDOFCHAIN = 0xfffffffe;
-const FREESECT = 0xffffffff;
-
-// Read every CFB stream, keyed by its (local) directory name. HWP5 stream names
-// are unique enough for our needs — "FileHeader", "Section0", "Section1", … —
-// so we skip full red-black-tree path reconstruction and key by local name.
-function readCfbStreamsByName(buf) {
-  if (
-    buf.length < 512 ||
-    buf.readUInt32LE(0) !== CFB_SIG_LO ||
-    buf.readUInt32LE(4) !== CFB_SIG_HI
-  ) {
-    return null; // not a compound file
-  }
-  const secSize = 1 << buf.readUInt16LE(30);
-  const miniSize = 1 << buf.readUInt16LE(32);
-  const firstDir = buf.readUInt32LE(48);
-  const miniCutoff = buf.readUInt32LE(56);
-  const firstMiniFat = buf.readUInt32LE(60);
-  const numMiniFat = buf.readUInt32LE(64);
-  const firstDifat = buf.readUInt32LE(68);
-  const sectorOff = (s) => 512 + s * secSize;
-
-  // DIFAT → list of FAT sectors (109 inline + any in DIFAT sectors).
-  const fatSectors = [];
-  for (let i = 0; i < 109; i++) {
-    const v = buf.readUInt32LE(76 + i * 4);
-    if (v < 0xfffffffc) fatSectors.push(v);
-  }
-  let ds = firstDifat;
-  const perSec = secSize / 4;
-  let guard = 0;
-  while (ds !== ENDOFCHAIN && ds !== FREESECT && guard++ < 100000) {
-    const base = sectorOff(ds);
-    for (let i = 0; i < perSec - 1; i++) {
-      const v = buf.readUInt32LE(base + i * 4);
-      if (v < 0xfffffffc) fatSectors.push(v);
-    }
-    ds = buf.readUInt32LE(base + (perSec - 1) * 4);
-  }
-  // The FAT itself (next-sector pointers).
-  const fat = [];
-  for (const fs of fatSectors) {
-    const base = sectorOff(fs);
-    for (let i = 0; i < perSec; i++) fat.push(buf.readUInt32LE(base + i * 4));
-  }
-  const readChain = (start, sizeLimit) => {
-    const parts = [];
-    let s = start;
-    let g = 0;
-    while (s !== ENDOFCHAIN && s !== FREESECT && s < fat.length && g++ < 1e7) {
-      const off = sectorOff(s);
-      parts.push(buf.subarray(off, off + secSize));
-      s = fat[s];
-    }
-    const out = Buffer.concat(parts);
-    return sizeLimit != null && out.length > sizeLimit
-      ? out.subarray(0, sizeLimit)
-      : out;
-  };
-
-  // Directory entries (128 bytes each).
-  const dir = readChain(firstDir);
-  const all = [];
-  for (let off = 0; off + 128 <= dir.length; off += 128) {
-    const nameLen = dir.readUInt16LE(off + 64);
-    if (nameLen < 2) continue;
-    const name = dir.toString("utf16le", off, off + nameLen - 2);
-    all.push({
-      name,
-      type: dir.readUInt8(off + 66),
-      startSec: dir.readUInt32LE(off + 116),
-      size: dir.readUInt32LE(off + 120),
-    });
-  }
-  // Root (type 5) holds the mini-stream; mini-FAT subdivides it.
-  const root = all.find((e) => e.type === 5);
-  const miniStream = root ? readChain(root.startSec, root.size) : Buffer.alloc(0);
-  const miniFatBytes = numMiniFat ? readChain(firstMiniFat) : Buffer.alloc(0);
-  const miniFat = [];
-  for (let i = 0; i + 4 <= miniFatBytes.length; i += 4) {
-    miniFat.push(miniFatBytes.readUInt32LE(i));
-  }
-  const readMini = (start, size) => {
-    const parts = [];
-    let s = start;
-    let g = 0;
-    while (s !== ENDOFCHAIN && s !== FREESECT && s < miniFat.length && g++ < 1e7) {
-      const off = s * miniSize;
-      parts.push(miniStream.subarray(off, off + miniSize));
-      s = miniFat[s];
-    }
-    const out = Buffer.concat(parts);
-    return size != null && out.length > size ? out.subarray(0, size) : out;
-  };
-
-  const streams = new Map();
-  for (const e of all) {
-    if (e.type !== 2) continue; // streams only
-    const bytes =
-      e.size < miniCutoff ? readMini(e.startSec, e.size) : readChain(e.startSec, e.size);
-    streams.set(e.name, bytes);
-  }
-  return streams;
-}
-
-// Walk an inflated HWP5 record stream and count records with the given tag.
-function countRecords(data, wantTag) {
-  let i = 0;
-  let n = 0;
-  while (i + 4 <= data.length) {
-    const h = data.readUInt32LE(i);
-    i += 4;
-    const tag = h & 0x3ff;
-    let size = (h >> 20) & 0xfff;
-    if (size === 0xfff) {
-      if (i + 4 > data.length) break;
-      size = data.readUInt32LE(i);
-      i += 4;
-    }
-    if (tag === wantTag) n++;
-    i += size;
-  }
-  return n;
-}
 
 function detectHwpMemos(buf) {
   const streams = readCfbStreamsByName(buf);
   if (!streams) return null;
-  // FileHeader flags bit 0 = compressed (BodyText sections are raw-deflate).
-  const fh = streams.get("FileHeader");
-  const compressed = fh && fh.length >= 40 ? (fh.readUInt32LE(36) & 1) === 1 : true;
 
   const perSection = {};
   let total = 0;
-  for (const [name, bytes] of streams) {
-    if (!/^Section\d+$/.test(name)) continue;
-    let data = bytes;
-    if (compressed) {
-      try {
-        data = inflateRawSync(bytes);
-      } catch {
-        continue; // unreadable section — skip rather than false-positive
-      }
-    }
-    const c = countRecords(data, HWPTAG_MEMO_LIST);
+  for (const [name, data] of sectionStreams(streams)) {
+    let c = 0;
+    for (const r of walkRecords(data)) if (r.tag === HWPTAG_MEMO_LIST) c++;
     if (c > 0) perSection[name] = c;
     total += c;
   }
@@ -190,51 +60,10 @@ function detectHwpMemos(buf) {
 
 // ── HWPX / ZIP ───────────────────────────────────────────────────────────────
 
-// Minimal ZIP reader: yield [name, bytes] for entries whose name passes `want`.
-function* readZipEntries(buf, want) {
-  // Find the End Of Central Directory record (sig PK\x05\x06), scanning back.
-  let eocd = -1;
-  for (let i = buf.length - 22; i >= 0 && i >= buf.length - 22 - 0x10000; i--) {
-    if (buf.readUInt32LE(i) === 0x06054b50) {
-      eocd = i;
-      break;
-    }
-  }
-  if (eocd < 0) return;
-  const count = buf.readUInt16LE(eocd + 10);
-  let p = buf.readUInt32LE(eocd + 16); // central directory offset
-  for (let k = 0; k < count && p + 46 <= buf.length; k++) {
-    if (buf.readUInt32LE(p) !== 0x02014b50) break;
-    const method = buf.readUInt16LE(p + 10);
-    const compSize = buf.readUInt32LE(p + 20);
-    const nameLen = buf.readUInt16LE(p + 28);
-    const extraLen = buf.readUInt16LE(p + 30);
-    const commentLen = buf.readUInt16LE(p + 32);
-    const lho = buf.readUInt32LE(p + 42);
-    const name = buf.toString("utf8", p + 46, p + 46 + nameLen);
-    p += 46 + nameLen + extraLen + commentLen;
-    if (!want(name)) continue;
-    // Local header → data start (its own name/extra lengths may differ).
-    if (buf.readUInt32LE(lho) !== 0x04034b50) continue;
-    const lNameLen = buf.readUInt16LE(lho + 26);
-    const lExtraLen = buf.readUInt16LE(lho + 28);
-    const dataOff = lho + 30 + lNameLen + lExtraLen;
-    const comp = buf.subarray(dataOff, dataOff + compSize);
-    let bytes;
-    try {
-      bytes = method === 0 ? comp : inflateRawSync(comp);
-    } catch {
-      continue;
-    }
-    yield [name, bytes];
-  }
-}
-
 function detectHwpxMemos(buf) {
   const perFile = {};
   let total = 0;
-  const want = (name) => /^Contents\/(section\d+|header)\.xml$/i.test(name);
-  for (const [name, bytes] of readZipEntries(buf, want)) {
+  for (const [name, bytes] of readZipEntries(buf, (n) => HWPX_CONTENT_PART.test(n))) {
     const xml = bytes.toString("utf8");
     // Count opening memo elements (namespace-prefixed in OWPML).
     const m = xml.match(/<(?:\w+:)?memo[\s>]/g);
@@ -253,61 +82,15 @@ function detectHwpxMemos(buf) {
 // (e.g. HWP3) — callers must treat 'unknown' as "could not rule memos out".
 export function detectMemos(path) {
   const buf = readFileSync(path);
-  if (buf.length >= 8 && buf.readUInt32LE(0) === CFB_SIG_LO && buf.readUInt32LE(4) === CFB_SIG_HI) {
+  const fmt = containerFormat(buf);
+  if (fmt === "hwp") {
     return detectHwpMemos(buf) ?? { format: "unknown", hasMemos: false, count: 0 };
   }
-  if (buf.length >= 4 && buf.readUInt32LE(0) === 0x04034b50) {
-    return detectHwpxMemos(buf);
-  }
+  if (fmt === "hwpx") return detectHwpxMemos(buf);
   return { format: "unknown", hasMemos: false, count: 0 };
 }
 
 // ── reading memos ────────────────────────────────────────────────────────────
-
-// Walk an inflated HWP5 record stream, yielding { tag, level, body }.
-function* walkRecords(data) {
-  let i = 0;
-  while (i + 4 <= data.length) {
-    const h = data.readUInt32LE(i);
-    i += 4;
-    const tag = h & 0x3ff;
-    const level = (h >> 10) & 0x3ff;
-    let size = (h >> 20) & 0xfff;
-    if (size === 0xfff) {
-      if (i + 4 > data.length) break;
-      size = data.readUInt32LE(i);
-      i += 4;
-    }
-    yield { tag, level, body: data.subarray(i, i + size) };
-    i += size;
-  }
-}
-
-// Decode an HWP5 PARA_TEXT record body to plain text. The body is UTF-16LE,
-// but code points 0–31 are inline control markers: a fixed set occupy 8 wchars
-// (the control + 6 params + the control again), the rest are 1 wchar.
-const INLINE8 = new Set([
-  1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
-]);
-function decodeParaText(body) {
-  let out = "";
-  let i = 0;
-  while (i + 2 <= body.length) {
-    const code = body.readUInt16LE(i);
-    if (INLINE8.has(code)) {
-      i += 16;
-      continue;
-    }
-    if (code < 32) {
-      if (code === 10 || code === 13) out += "\n";
-      i += 2;
-      continue;
-    }
-    out += String.fromCharCode(code);
-    i += 2;
-  }
-  return out.normalize("NFC");
-}
 
 // Extract memos. Returns [{ index, id, location, text, anchor }] where `text`
 // is the memo's own content and `anchor` is the body text the memo is attached
@@ -318,21 +101,10 @@ function decodeParaText(body) {
 export function readMemos(path) {
   const buf = readFileSync(path);
   const out = [];
-  if (buf.readUInt32LE(0) === CFB_SIG_LO && buf.readUInt32LE(4) === CFB_SIG_HI) {
+  if (isCfb(buf)) {
     const streams = readCfbStreamsByName(buf);
     if (!streams) return out;
-    const fh = streams.get("FileHeader");
-    const compressed = fh && fh.length >= 40 ? (fh.readUInt32LE(36) & 1) === 1 : true;
-    for (const [name, bytes] of streams) {
-      if (!/^Section\d+$/.test(name)) continue;
-      let data = bytes;
-      if (compressed) {
-        try {
-          data = inflateRawSync(bytes);
-        } catch {
-          continue;
-        }
-      }
+    for (const [name, data] of sectionStreams(streams)) {
       const recs = [...walkRecords(data)];
       const firstMemo = recs.findIndex((r) => r.tag === HWPTAG_MEMO_LIST);
       if (firstMemo < 0) continue;
@@ -432,9 +204,8 @@ export function readMemos(path) {
     }
     return out;
   }
-  if (buf.readUInt32LE(0) === 0x04034b50) {
-    const want = (n) => /^Contents\/(section\d+|header)\.xml$/i.test(n);
-    for (const [name, bytes] of readZipEntries(buf, want)) {
+  if (isZip(buf)) {
+    for (const [name, bytes] of readZipEntries(buf, (n) => HWPX_CONTENT_PART.test(n))) {
       const xml = bytes.toString("utf8");
       const blocks = xml.match(/<(?:\w+:)?memo\b[^>]*>[\s\S]*?<\/(?:\w+:)?memo>/g) || [];
       for (const blk of blocks) {
@@ -480,4 +251,3 @@ export function assertMemoSafe(inputPath, argv = process.argv) {
   }
   return info;
 }
-

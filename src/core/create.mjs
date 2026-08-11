@@ -27,6 +27,24 @@
 //     // cols 0..n-1, ...). Use this to fill a fresh table cell-by-cell
 //     // immediately after `create_table`.
 //
+//   { "op": "apply_para_format",
+//     "section": 0, "para": 3,
+//     "props": { "marginLeft": 2000, "indent": 0, "alignment": "left" } }
+//     // Paragraph shape for one paragraph. `props` goes to the engine's
+//     // applyParaFormat verbatim; keys it reads include alignment,
+//     // lineSpacing, marginLeft / marginRight / indent (HWPUNIT, 1/7200
+//     // inch), spacingBefore / spacingAfter.
+//     //
+//     // marginLeft is the one that matters for structure. Korean documents
+//     // encode outline DEPTH as marker glyph + INDENT, not as heading
+//     // styles or numbering: headType/paraLevel/numberingId read None/0/0
+//     // on effectively every paragraph of every real document, so a
+//     // depth-aware reader has nothing else to go on. This op is what lets
+//     // the heading fixtures carry real indentation.
+//     //
+//     // NOTE the engine accepts unknown keys silently (it never rejects a
+//     // typo'd prop), so a misspelled key is a no-op, not an error.
+//
 // IMPORTANT: a fresh blank document has exactly one section (index 0)
 // with one paragraph (index 0). To add content beyond that one paragraph
 // you MUST emit an `insert_paragraph` step before referencing the new
@@ -127,6 +145,21 @@ try {
         );
         applied.push({ i, op: step.op });
         break;
+      case "apply_para_format": {
+        // Validate on OUR side: the engine returns {"ok":true} for anything
+        // JSON-ish, including a bare string or malformed props, so a typo'd
+        // plan would otherwise be reported as applied while doing nothing.
+        const props = step.props;
+        if (props === null || typeof props !== "object" || Array.isArray(props)) {
+          fail(
+            EXIT.USAGE,
+            `step ${i}: apply_para_format requires a "props" object, e.g. {"marginLeft":2000}`,
+          );
+        }
+        doc.applyParaFormat(step.section ?? 0, step.para ?? 0, JSON.stringify(props));
+        applied.push({ i, op: step.op });
+        break;
+      }
       default:
         fail(EXIT.USAGE, `unknown op at step ${i}: ${step.op}`);
     }

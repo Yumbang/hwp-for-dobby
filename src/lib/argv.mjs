@@ -1,0 +1,73 @@
+// Strict argv parsing, shared by every script.
+//
+// Promoted verbatim (behavior-wise) from extract_tables.mjs, which had the only
+// version that fails LOUDLY. The other scripts used `argv[i+1]` with no
+// validation, so `--format` at the end of the line silently became `undefined`
+// and `--table --format markdown` silently parsed "--format" as the table index.
+// For a tool whose whole job is not to corrupt a document quietly, an option
+// that mis-parses in silence is the wrong default: a flag given without a value
+// is a USAGE error, not a fallback to the default.
+//
+// Every helper takes the argv array explicitly (defaulting to process.argv) so
+// tests can drive them without spawning a process.
+
+import { EXIT, fail } from "./exit-codes.mjs";
+
+// A value that itself starts with "--" is treated as a missing value, not as a
+// value. This is the rule that catches `--table --format markdown`.
+function valueAt(argv, i) {
+  const v = argv[i + 1];
+  return v === undefined || v.startsWith("--") ? undefined : v;
+}
+
+// String option. Absent → dflt. Present without a value → exit USAGE.
+export function strArg(name, dflt, argv = process.argv) {
+  const i = argv.indexOf(name);
+  if (i < 0) return dflt;
+  const v = valueAt(argv, i);
+  if (v === undefined) fail(EXIT.USAGE, `error: ${name} requires a value`);
+  return v;
+}
+
+// Non-negative integer option. Rejects floats, signs, whitespace padding and
+// anything that does not round-trip through String(parseInt(v)) — "3.5", "-1"
+// and "3abc" are all usage errors rather than a silently truncated 3.
+export function intArg(name, dflt, argv = process.argv) {
+  const i = argv.indexOf(name);
+  if (i < 0) return dflt;
+  const raw = argv[i + 1];
+  const v = valueAt(argv, i);
+  const n = v !== undefined ? Number.parseInt(v, 10) : NaN;
+  if (!Number.isInteger(n) || n < 0 || String(n) !== v.trim()) {
+    fail(
+      EXIT.USAGE,
+      `error: ${name} requires a non-negative integer (got ${raw === undefined ? "nothing" : JSON.stringify(raw)})`,
+    );
+  }
+  return n;
+}
+
+export function flag(name, argv = process.argv) {
+  return argv.includes(name);
+}
+
+// One-of option: like strArg but constrained to a known set, with the allowed
+// values in the error. Used for --format / --mode / --op style switches so each
+// script does not re-spell the same validation.
+export function enumArg(name, allowed, dflt, argv = process.argv) {
+  const v = strArg(name, dflt, argv);
+  if (v !== undefined && !allowed.includes(v)) {
+    fail(EXIT.USAGE, `unknown ${name}: ${v} (expected ${allowed.join("|")})`);
+  }
+  return v;
+}
+
+// The leading positional input path. Rejects a missing path and a first
+// argument that is actually a flag (`read.mjs --memos` with no file), both of
+// which would otherwise be read as a filename later and fail as a confusing
+// LOAD error instead of a usage error.
+export function inputPath(usage, argv = process.argv) {
+  const p = argv[2];
+  if (!p || p.startsWith("--")) fail(EXIT.USAGE, usage);
+  return p;
+}

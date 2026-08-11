@@ -14,8 +14,27 @@
 // directory is excluded by default and can never silently leak into a shipped
 // or installed artifact.
 
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, sep } from "node:path";
+
+// ── the skill's NAME, read from the one place that defines it ──────────────
+//
+// SKILL.md's frontmatter `name:` is not a label — it is the identity. Claude
+// Code discovers the skill by it, the install directory is named after it, and
+// the /<name> invocation is it. So it is read from SKILL.md rather than
+// repeated: a hardcoded copy in the installer and another in the builder is
+// three sources of truth for one string, and the failure mode is a skill that
+// installs into a directory whose name does not match its frontmatter — which
+// loads as nothing at all, silently.
+export function skillName(root) {
+  const src = readFileSync(join(root, "SKILL.md"), "utf8");
+  // Frontmatter only: the first --- fenced block at the very top.
+  const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(src);
+  if (!fm) throw new Error("SKILL.md has no YAML frontmatter — cannot determine the skill name");
+  const m = /^name:[ \t]*("?)([A-Za-z0-9][A-Za-z0-9._-]*)\1[ \t]*$/m.exec(fm[1]);
+  if (!m) throw new Error("SKILL.md frontmatter has no usable `name:` field");
+  return m[2];
+}
 
 // Top-level files taken verbatim.
 export const ALLOW_FILES = ["SKILL.md", "README.md", "package.json", "LICENSE.txt"];

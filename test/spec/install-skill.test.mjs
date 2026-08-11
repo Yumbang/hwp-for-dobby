@@ -33,11 +33,16 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 
-import { collectPayload } from "../../scripts/_payload.mjs";
+import { collectPayload, skillName } from "../../scripts/_payload.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, "..", "..");
 const INSTALLER = join(ROOT, "scripts", "install-skill.mjs");
+// The installed directory is named after SKILL.md's frontmatter `name:`, so the
+// test reads it from the same place the installer does. Hard-coding it here
+// once meant a rename had to be made in twelve places, and any one of them
+// missed would have left a test asserting a path nothing writes to.
+const SKILL = skillName(ROOT);
 
 // Run the installer with cwd pointed at a scratch "project".
 function run(cwd, args) {
@@ -86,7 +91,7 @@ test("install --project: lands a working skill and reports the file count", () =
     assert.equal(out.action, "installed");
     assert.equal(out.files, collectPayload(ROOT).length);
 
-    const skillDir = join(w, ".claude", "skills", "hwp");
+    const skillDir = join(w, ".claude", "skills", SKILL);
     assert.ok(existsSync(join(skillDir, "SKILL.md")), "SKILL.md must be installed");
     assert.ok(
       existsSync(join(skillDir, "vendor", "rhwp", "rhwp_bg.wasm")),
@@ -113,7 +118,7 @@ test("--dry-run: reports the plan and writes nothing", () => {
     assert.equal(r.status, 0);
     assert.equal(JSON.parse(r.stdout).dryRun, true);
     assert.equal(
-      existsSync(join(w, ".claude", "skills", "hwp")),
+      existsSync(join(w, ".claude", "skills", SKILL)),
       false,
       "--dry-run must not create the skill directory",
     );
@@ -130,7 +135,7 @@ test("status: 0 when current, 5 when an installed copy drifts from the repo", ()
 
     // Simulate the real failure: the repo moved on (or someone hand-edited the
     // installed copy) and nobody re-ran install.
-    const installed = join(w, ".claude", "skills", "hwp", "SKILL.md");
+    const installed = join(w, ".claude", "skills", SKILL, "SKILL.md");
     writeFileSync(installed, readFileSync(installed, "utf8") + "\nDRIFTED\n");
 
     const r = run(w, ["status"]);
@@ -149,7 +154,7 @@ test("re-install is a CLEAN replace: files the payload dropped do not linger", (
   const w = workdir();
   try {
     run(w, ["install", "--project"]);
-    const stray = join(w, ".claude", "skills", "hwp", "STRAY-FROM-OLD-VERSION.mjs");
+    const stray = join(w, ".claude", "skills", SKILL, "STRAY-FROM-OLD-VERSION.mjs");
     writeFileSync(stray, "// left over from an older skill version\n");
     run(w, ["install", "--project"]);
     assert.equal(
@@ -167,14 +172,14 @@ test("install refuses to overwrite a symlink, and leaves it intact", () => {
   try {
     const skillsDir = join(w, ".claude", "skills");
     mkdirSync(skillsDir, { recursive: true });
-    symlinkSync(ROOT, join(skillsDir, "hwp"));
+    symlinkSync(ROOT, join(skillsDir, SKILL));
 
     const r = run(w, ["install", "--project"]);
     assert.equal(r.status, 6, `must refuse with UNSAFE(6), got ${r.status}: ${r.stderr}`);
     assert.match(r.stderr, /symlink/i, "the refusal must name the symlink as the reason");
     assert.match(r.stderr, /--force/, "the refusal must document the override");
     assert.ok(
-      existsSync(join(skillsDir, "hwp", "SKILL.md")),
+      existsSync(join(skillsDir, SKILL, "SKILL.md")),
       "the symlink must survive a refused install",
     );
   } finally {
@@ -185,7 +190,7 @@ test("install refuses to overwrite a symlink, and leaves it intact", () => {
 test("install refuses to delete an unrelated directory sitting at the target path", () => {
   const w = workdir();
   try {
-    const target = join(w, ".claude", "skills", "hwp");
+    const target = join(w, ".claude", "skills", SKILL);
     mkdirSync(target, { recursive: true });
     writeFileSync(join(target, "someone-elses-notes.md"), "important\n");
 
@@ -225,7 +230,7 @@ test("agents target: AGENTS.md pointer is repo-RELATIVE and refreshes in place",
     assert.equal(JSON.parse(r2.stdout).agentsMd.action, "refreshed");
     text = readFileSync(md, "utf8");
     assert.equal(
-      text.split("<!-- BEGIN hwp skill -->").length - 1,
+      text.split(`<!-- BEGIN ${SKILL} skill -->`).length - 1,
       1,
       "re-running must not duplicate the pointer section",
     );
@@ -239,7 +244,7 @@ test("--no-agents-md: installs the directory without touching AGENTS.md", () => 
   try {
     const r = run(w, ["install", "--target", "agents", "--project", "--no-agents-md"]);
     assert.equal(r.status, 0);
-    assert.ok(existsSync(join(w, ".agents", "skills", "hwp", "SKILL.md")));
+    assert.ok(existsSync(join(w, ".agents", "skills", SKILL, "SKILL.md")));
     assert.equal(existsSync(join(w, "AGENTS.md")), false, "AGENTS.md must not be created");
   } finally {
     rmSync(w, { recursive: true, force: true });
@@ -256,7 +261,7 @@ test("uninstall: removes the skill and its AGENTS.md section, leaving the rest",
     const r = run(w, ["uninstall", "--target", "agents", "--project"]);
     assert.equal(r.status, 0, `uninstall must exit 0: ${r.stderr}`);
     assert.equal(JSON.parse(r.stdout).action, "removed");
-    assert.equal(existsSync(join(w, ".agents", "skills", "hwp")), false);
+    assert.equal(existsSync(join(w, ".agents", "skills", SKILL)), false);
 
     const text = readFileSync(md, "utf8");
     assert.ok(!text.includes("BEGIN hwp skill"), "the pointer section must be gone");
@@ -276,12 +281,12 @@ test("uninstall on a symlink unlinks it WITHOUT deleting the checkout it points 
 
     const skillsDir = join(w, ".claude", "skills");
     mkdirSync(skillsDir, { recursive: true });
-    symlinkSync(checkout, join(skillsDir, "hwp"));
+    symlinkSync(checkout, join(skillsDir, SKILL));
 
     const r = run(w, ["uninstall", "--project"]);
     assert.equal(r.status, 0, `uninstall must exit 0: ${r.stderr}`);
     assert.equal(JSON.parse(r.stdout).action, "unlinked");
-    assert.equal(existsSync(join(skillsDir, "hwp")), false, "the link must be gone");
+    assert.equal(existsSync(join(skillsDir, SKILL)), false, "the link must be gone");
     assert.ok(
       existsSync(join(checkout, "SKILL.md")),
       "uninstall must NEVER follow the link and delete the developer's checkout",
