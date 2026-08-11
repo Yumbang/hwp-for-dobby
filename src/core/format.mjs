@@ -11,25 +11,31 @@
 // CORE-TIER: WASM-only. No rhwp CLI, no capabilities/requireCli. Behaves
 // identically on claude.ai / cowork / code.
 //
-// PROPS (validated only as "parses to a JSON object" on our side — see below):
-//   char (applyCharFormat): keys the engine reads include
-//     bold, italic, underline, strikethrough (bool); fontSize (HWPUNIT, e.g.
-//     1400 = 14pt); textColor ("#RRGGBB"); fontFamily (string). Empirically
-//     confirmed to round-trip: {"bold":true}, {"fontSize":1400},
-//     {"textColor":"#FF0000"} all read back via getCharPropertiesAt on reload.
-//   para (applyParaFormat): keys the engine reads include
-//     alignment ("left"|"center"|"right"|"justify"|"distribute"); lineSpacing
-//     (percent, e.g. 200); marginLeft / marginRight / indent; spacingBefore /
-//     spacingAfter. Empirically confirmed to round-trip: {"alignment":"center"},
-//     {"lineSpacing":200} read back via getParaPropertiesAt on reload.
+// PROPS — validated against a verified table before anything is applied.
+//   char: bold, italic, underline, strikethrough, superscript, subscript,
+//         emboss, engrave (boolean); fontSize (integer HWPUNIT, 1400 = 14pt);
+//         textColor ("#RRGGBB").
+//   para: alignment ("left"|"center"|"right"|"justify"|"distribute");
+//         lineSpacing (integer percent); marginLeft / marginRight / indent /
+//         spacingBefore / spacingAfter (integer HWPUNIT, negative allowed for a
+//         hanging indent); keepWithNext, pageBreakBefore, widowOrphan,
+//         keepLines (boolean).
+//   Every key in that list was confirmed by applying it alone and reading the
+//   value back after an export→reload. See lib/format_props.mjs.
 //
-//   NOTE on validation: the engine is LENIENT — unknown keys, an empty object,
-//   and even malformed JSON passed to applyCharFormat/applyParaFormat all return
-//   {"ok":true} and are silently ignored. So we cannot rely on the engine to
-//   reject a typo'd prop. We validate on OUR side that --props parses to a plain
-//   JSON object (fail USAGE otherwise), then pass the ORIGINAL string through
-//   unchanged so the engine sees exactly what the caller wrote. A misspelled key
-//   will simply have no effect (and the getter-confirm below will not show it).
+//   WHY THE TABLE EXISTS: the engine is completely permissive. A typo'd key
+//   ({"boldd":true}), the right key in the wrong case ({"BOLD":true}), a real
+//   key it does not act on ({"fontFamily":"굴림"}), an invalid enum value
+//   ({"alignment":"banana"}) and a wrong-typed value ({"bold":"yes"}) ALL return
+//   {"ok":true} and change nothing. Before this table, format.mjs answered
+//   `ok:true, verified:true` for a document it had not altered at all — the
+//   formatting silently did not happen and every signal said it did. Unknown or
+//   ill-typed props are now a USAGE error naming the nearest valid key;
+//   --allow-unknown-props sends them anyway (with a warning) so a future engine
+//   version's new key is never blocked by our list.
+//
+//   The ORIGINAL --props string is still what reaches the engine, unchanged, so
+//   the engine always sees exactly what the caller wrote.
 //
 // VERIFICATION (universal edit contract 2): formatting is NOT text-probeable, so
 // exportVerify is called with NO expectPresent/expectAbsent — it still exports,
@@ -51,13 +57,14 @@
 
 import { loadDocument } from "../lib/_bootstrap.mjs";
 import { EXIT, fail } from "../lib/exit-codes.mjs";
+import { classifyEffect, validateProps } from "../lib/format_props.mjs";
 import { assertMemoSafe } from "../lib/memo.mjs";
 import { assertTrackChangeSafe } from "../lib/trackchange.mjs";
 import { exportVerify } from "../lib/verify.mjs";
 
 const USAGE =
   "usage: format.mjs <input> --op char|para --section N --paragraph N " +
-  "[--start N --end N] --props '<json>' --output <out.hwp>";
+  "[--start N --end N] --props '<json>' [--allow-unknown-props] --output <out.hwp>";
 
 // Option parsing in the style of the sibling core scripts (replace.mjs): one
 // positional input plus named flags. Kept small.
@@ -124,6 +131,22 @@ try {
 if (props === null || typeof props !== "object" || Array.isArray(props))
   fail(EXIT.USAGE, `error: --props must be a JSON object, e.g. '{"bold":true}'\n${USAGE}`);
 
+// Then check the KEYS and VALUES against the verified table. This is the only
+// thing standing between a typo and a confident "verified:true" on a document
+// that was never changed — the engine reports success either way.
+{
+  const { errors, warnings } = validateProps(op, props, {
+    allowUnknown: flag("--allow-unknown-props"),
+  });
+  for (const w of warnings) process.stderr.write(`WARNING: ${w}\n`);
+  if (errors.length) {
+    fail(
+      EXIT.USAGE,
+      errors.map((e) => `error: ${e}`).join("\n") + `\n${USAGE}`,
+    );
+  }
+}
+
 // Refuse a memo-bearing input (the engine drops memos on save) unless the
 // caller passed --allow-memo-loss. No-op on memo-free inputs.
 assertMemoSafe(input, process.argv);
@@ -139,6 +162,22 @@ try {
 } catch (e) {
   fail(EXIT.LOAD, `error: could not load ${input}: ${e?.message ?? e}`);
 }
+
+// Snapshot the shape BEFORE the edit. Comparing it against the reloaded shape
+// is what turns "the engine said ok" into "the value actually moved" — the
+// engine says ok for requests it ignores entirely.
+function readShape(d) {
+  try {
+    return JSON.parse(
+      op === "char"
+        ? d.getCharPropertiesAt(section, paragraph, start)
+        : d.getParaPropertiesAt(section, paragraph),
+    );
+  } catch {
+    return null;
+  }
+}
+const beforeShape = readShape(doc);
 
 // --- apply -------------------------------------------------------------------
 // applyCharFormat / applyParaFormat return a JSON string {"ok":true}. An
@@ -191,27 +230,49 @@ if (!result.verified) {
 // If the getter or a key is unavailable we still succeed (the clean round-trip
 // already passed) but note that visual confirmation needs Phase 3 render.
 const applied = {};
+const effect = {};
 let confirmed = false;
 let note;
 try {
   const reloaded = await loadDocument(result.outputPath);
-  const shape = JSON.parse(
-    op === "char"
-      ? reloaded.getCharPropertiesAt(section, paragraph, start)
-      : reloaded.getParaPropertiesAt(section, paragraph),
-  );
+  const shape = readShape(reloaded);
+  if (!shape) throw new Error("shape getter unavailable");
   for (const key of Object.keys(props)) {
     if (Object.prototype.hasOwnProperty.call(shape, key)) {
       applied[key] = shape[key];
       confirmed = true;
     }
+    effect[key] = classifyEffect(key, props[key], beforeShape, shape);
   }
+
+  // A key that came back "no-effect" was accepted by the engine and did
+  // nothing — the exact silent failure this script exists to refuse. It is
+  // reported as CORRUPTION rather than success, because "verified:true" on a
+  // document that did not change is worse than an error.
+  const dead = Object.keys(effect).filter((k) => effect[k] === "no-effect");
+  if (dead.length) {
+    process.stderr.write(JSON.stringify({ op, section, paragraph, props, effect }) + "\n");
+    fail(
+      EXIT.CORRUPTION,
+      `error: the engine accepted ${dead.map((k) => `"${k}"`).join(", ")} and applied nothing —\n` +
+        `       the value is unchanged on disk and does not match what was requested.\n` +
+        `       This usually means the VALUE is not one the engine acts on.\n` +
+        `       The output file at ${result.outputPath} is a clean copy WITHOUT that formatting.`,
+    );
+  }
+
   if (!confirmed)
     note =
       "applied + clean round-trip, but no requested key is exposed by the shape " +
       "getter — verify visually with enhanced/render (Phase 3).";
+  else if (Object.values(effect).includes("unverifiable"))
+    note =
+      "some values are unit-converted by the engine (e.g. marginLeft HWPUNIT → pt), " +
+      "so an unchanged number cannot be told apart from a re-applied one; the keys " +
+      "marked 'unverifiable' in `effect` were sent but not independently confirmed.";
 } catch {
   // Getter not available / threw — fall back to the clean-round-trip guarantee.
+  // (fail() above exits the process outright, so it never lands here.)
   note =
     "applied + clean round-trip, but the shape getter was unavailable — verify " +
     "visually with enhanced/render (Phase 3).";
@@ -225,6 +286,7 @@ const summary = {
   ...(op === "char" ? { start, end } : {}),
   props,
   applied,
+  effect, // per key: changed | already-set | unverifiable | unexposed
   verified: true,
   outputPath: result.outputPath,
 };
