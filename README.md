@@ -189,7 +189,9 @@ cp target/release/rhwp ~/.claude/skills/hwp-for-dobby/vendor/bin/rhwp-darwin-arm
 node src/core/info.mjs samples/fixture-table.hwp
 
 # 본문 읽기 (표는 flatten 거부 — 자리표시자 + 경고)
+# 기본: 절 스냅샷을 찍고, 두 번째 읽기부터 stderr에 지난 읽기 이후 변경을 보고한 뒤 기준선을 갱신
 node src/core/read.mjs samples/fixture-table.hwp --format text
+# 스냅샷 없이: --no-snapshot
 
 # 표 데이터는 반드시 이걸로 (병합 셀 주소 복원)
 node src/core/extract_tables.mjs samples/fixture-table.hwp --format markdown

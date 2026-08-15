@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Usage:
 //   node src/core/edit_cell.mjs <input> --op insert|delete|set \
-//     --section N --paragraph N --control N \
+//     (--table N | --section N --paragraph N --control N) \
 //     (--cell N | --row R --col C) [--cell-para N] [--offset N] \
 //     [--text "..."] [--count N] --output <out.hwp>
 //
@@ -12,7 +12,9 @@
 //   --op set     : replace the WHOLE cell paragraph with --text (delete current
 //                  length via getCellParagraphLength, then insert at 0).
 //
-// A cell is addressed EITHER by its linear --cell index, OR by --row/--col.
+// The TABLE is addressed either by extract_tables.mjs `index` (`--table N`,
+// top-level tables only) or by --section/--paragraph/--control. A cell is
+// addressed EITHER by its linear --cell index, OR by --row/--col.
 // row/col are mapped to a cell index by scanning getCellInfo over the origin
 // cells [0, cellCount) for the one whose {row,col} matches (spec rule 1 —
 // merge-origin storage; covered positions have NO cell). If --row/--col names
@@ -37,10 +39,11 @@ import { loadDocument } from "../lib/_bootstrap.mjs";
 import { EXIT, fail } from "../lib/exit-codes.mjs";
 import { assertMemoSafe } from "../lib/memo.mjs";
 import { assertTrackChangeSafe } from "../lib/trackchange.mjs";
+import { extractTables } from "../lib/tables.mjs";
 import { exportVerify } from "../lib/verify.mjs";
 
 const USAGE =
-  "usage: edit_cell.mjs <input> --op insert|delete|set --section N --paragraph N --control N\n" +
+  "usage: edit_cell.mjs <input> --op insert|delete|set (--table N | --section N --paragraph N --control N)\n" +
   "       (--cell N | --row R --col C) [--cell-para N] [--offset N] [--text \"...\"] [--count N] --output <out.hwp>";
 
 // Minimal option parsing in the style of the other core/ scripts: one
@@ -74,9 +77,20 @@ if (!op || !["insert", "delete", "set"].includes(op)) {
   fail(EXIT.USAGE, `error: --op must be insert|delete|set\n${USAGE}`);
 }
 
-const section = intArg("--section", { required: true });
-const paragraph = intArg("--paragraph", { required: true });
-const control = intArg("--control", { required: true });
+const tableIdxRaw = arg("--table");
+const hasTableIdx = tableIdxRaw !== undefined;
+const hasAddr =
+  arg("--section") !== undefined || arg("--paragraph") !== undefined || arg("--control") !== undefined;
+if (hasTableIdx && hasAddr) {
+  fail(EXIT.USAGE, `error: use either --table N or --section/--paragraph/--control, not both\n${USAGE}`);
+}
+if (!hasTableIdx && !hasAddr) {
+  fail(EXIT.USAGE, `error: address the table with --table N or --section/--paragraph/--control\n${USAGE}`);
+}
+const wantTable = hasTableIdx ? intArg("--table", { required: true }) : null;
+const sectionArg = hasAddr ? intArg("--section", { required: true }) : null;
+const paragraphArg = hasAddr ? intArg("--paragraph", { required: true }) : null;
+const controlArg = hasAddr ? intArg("--control", { required: true }) : null;
 const cellPara = intArg("--cell-para", { dflt: 0 });
 const offset = intArg("--offset", { dflt: 0 });
 
@@ -123,6 +137,26 @@ try {
   doc = await loadDocument(inputPath);
 } catch (e) {
   fail(EXIT.LOAD, `error: could not load ${inputPath}: ${e?.message ?? e}`);
+}
+
+let section = sectionArg;
+let paragraph = paragraphArg;
+let control = controlArg;
+if (wantTable !== null) {
+  const found = extractTables(doc, { noNested: false }).find((t) => t.index === wantTable);
+  if (!found) {
+    fail(EXIT.NOT_FOUND, `error: no table with index ${wantTable}. Run extract_tables.mjs --summary to list them.`);
+  }
+  if (found.controlIndex == null) {
+    fail(
+      EXIT.NOT_FOUND,
+      `error: table ${wantTable} is nested (inside table ${found.nestedIn} at row ${found.hostCell?.row}, col ${found.hostCell?.col}). ` +
+        `--table addresses top-level tables only; edit the host cell or use --section/--paragraph/--control on the parent.`,
+    );
+  }
+  section = found.section;
+  paragraph = found.paragraph;
+  control = found.controlIndex;
 }
 
 // Read the table's origin-cell count up front. getTableDimensions throws on a
@@ -241,7 +275,7 @@ process.stdout.write(
     ok: true,
     op,
     input: inputPath,
-    table: { section, paragraph, control },
+    table: { section, paragraph, control, ...(wantTable !== null ? { index: wantTable } : {}) },
     cell: wantCell,
     ...(byRowCol ? { row: wantRow, col: wantCol } : {}),
     cellPara,

@@ -765,7 +765,7 @@ test("read (plain): a clean document emits NO tracked-change output at all", () 
   // Any unconditional line here — a "no tracked changes" note, a debug print —
   // breaks all of them. This is that contract, stated locally.
   for (const f of ["fixture-table.hwp", "fixture-form.hwp", "fixture-table.hwpx"]) {
-    const r = run("read.mjs", [sample(f)]);
+    const r = run("read.mjs", [sample(f), "--no-snapshot"]);
     assert.doesNotMatch(r.stderr, /TRACKED CHANGES/, `${f}: no tracked-change warning`);
     assert.doesNotMatch(r.stderr, /변경 내용 추적/, `${f}: no tracked-change warning`);
     assert.doesNotMatch(r.stdout, /변경 내용 추적/, `${f}: nothing on stdout either`);

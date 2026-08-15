@@ -52,7 +52,7 @@ for (const doc of DOCS) {
   test(`cross-script: ${doc} — one strict placeholder per top-level table`, () => {
     const { tables } = tablesOf(doc);
     const topLevel = tables.filter((t) => t.controlIndex !== undefined);
-    const strict = run("src/core/read.mjs", [doc]).stdout;
+    const strict = run("src/core/read.mjs", [doc, "--no-snapshot"]).stdout;
     const placeholders = strict.split("\n").filter((l) => l === PLACEHOLDER).length;
     assert.equal(
       placeholders,
@@ -64,7 +64,7 @@ for (const doc of DOCS) {
 
   test(`cross-script: ${doc} — best-effort loses no addressed cell text`, () => {
     const { tables } = tablesOf(doc);
-    const flat = run("src/core/read.mjs", [doc, "--mode", "best-effort"]).stdout;
+    const flat = run("src/core/read.mjs", [doc, "--mode", "best-effort", "--no-snapshot"]).stdout;
     // Compare on a whitespace-insensitive projection: best-effort writes a
     // cell's paragraphs joined by \n, and this test is about presence, not
     // layout. (Both sides are already NFC — spec §21.)

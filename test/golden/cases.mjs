@@ -18,30 +18,30 @@
 
 export const CASES = [
   // ── read.mjs: the strict/best-effort table contract ──────────────────────
-  { name: "read/hwp-strict", script: "src/core/read.mjs", argv: ["samples/fixture-table.hwp"] },
+  { name: "read/hwp-strict", script: "src/core/read.mjs", argv: ["samples/fixture-table.hwp", "--no-snapshot"] },
   {
     name: "read/hwp-best-effort",
     script: "src/core/read.mjs",
-    argv: ["samples/fixture-table.hwp", "--mode", "best-effort"],
+    argv: ["samples/fixture-table.hwp", "--mode", "best-effort", "--no-snapshot"],
   },
-  { name: "read/hwpx-strict", script: "src/core/read.mjs", argv: ["samples/fixture-table.hwpx"] },
+  { name: "read/hwpx-strict", script: "src/core/read.mjs", argv: ["samples/fixture-table.hwpx", "--no-snapshot"] },
   {
     name: "read/hwpx-best-effort",
     script: "src/core/read.mjs",
-    argv: ["samples/fixture-table.hwpx", "--mode", "best-effort"],
+    argv: ["samples/fixture-table.hwpx", "--mode", "best-effort", "--no-snapshot"],
   },
-  { name: "read/form-no-tables", script: "src/core/read.mjs", argv: ["samples/fixture-form.hwp"] },
+  { name: "read/form-no-tables", script: "src/core/read.mjs", argv: ["samples/fixture-form.hwp", "--no-snapshot"] },
   {
     name: "read/explicit-strict-and-page-all",
     script: "src/core/read.mjs",
-    argv: ["samples/fixture-table.hwp", "--format", "text", "--page", "all", "--mode", "strict"],
+    argv: ["samples/fixture-table.hwp", "--format", "text", "--page", "all", "--mode", "strict", "--no-snapshot"],
   },
 
   // ── read.mjs: memos (the guard's read path) ──────────────────────────────
   {
     name: "read/memo-auto-surfaced",
     script: "src/core/read.mjs",
-    argv: ["samples/fixture-memo.hwpx"],
+    argv: ["samples/fixture-memo.hwpx", "--no-snapshot"],
   },
   {
     name: "read/memos-json",

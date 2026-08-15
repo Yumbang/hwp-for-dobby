@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // Usage:
-//   node src/core/extract_tables.mjs <input.hwp|.hwpx> [--format json|markdown] \
+//   node src/core/extract_tables.mjs <input.hwp|.hwpx> [--format json|markdown|csv] \
 //     [--table N] [--fill-merged] [--no-nested] [--max-depth N] \
-//     [--data-tables-only] [--drop-empty] [--detect-form-type]
+//     [--data-tables-only] [--drop-empty] [--detect-form-type] [--summary]
 //
 // Structured table extraction with cell addresses and merge info. This is
 // the safe way to read table DATA out of a document — unlike text/markdown
@@ -102,12 +102,12 @@ import { EXIT, fail } from "../lib/exit-codes.mjs";
 import { renderTableMarkdown } from "../lib/render_md.mjs";
 import { extractTables } from "../lib/tables.mjs";
 
-const input = inputPath(
-  "usage: extract_tables.mjs <input.hwp|.hwpx> [--format json|markdown] [--table N] [--fill-merged] [--no-nested] [--max-depth N] [--data-tables-only] [--drop-empty] [--detect-form-type]",
-);
+const USAGE =
+  "usage: extract_tables.mjs <input.hwp|.hwpx> [--format json|markdown|csv] [--table N] [--fill-merged] [--no-nested] [--max-depth N] [--data-tables-only] [--drop-empty] [--detect-form-type] [--summary]";
+const input = inputPath(USAGE);
 const format = strArg("--format", "json");
-if (format !== "json" && format !== "markdown") {
-  fail(EXIT.USAGE, `unknown --format: ${format} (expected json|markdown)`);
+if (format !== "json" && format !== "markdown" && format !== "csv") {
+  fail(EXIT.USAGE, `unknown --format: ${format} (expected json|markdown|csv)`);
 }
 const onlyTable = intArg("--table", null);
 const fillMerged = flag("--fill-merged");
@@ -116,6 +116,10 @@ const maxDepth = intArg("--max-depth", 3);
 const dataTablesOnly = flag("--data-tables-only");
 const dropEmpty = flag("--drop-empty");
 const detectFormType = flag("--detect-form-type");
+const summaryOnly = flag("--summary");
+if (summaryOnly && format === "csv") {
+  fail(EXIT.USAGE, "error: --summary cannot be combined with --format csv (csv is the data grid)");
+}
 
 let doc;
 try {
@@ -306,13 +310,30 @@ if (onlyTable !== null) {
 }
 
 if (format === "json") {
+  const tablesOut = summaryOnly ? selected.map(summarizeTable) : selected;
   const out = {
     input,
     sourceFormat: doc.getSourceFormat(),
-    tableCount: selected.length,
-    tables: selected,
+    tableCount: tablesOut.length,
+    ...(summaryOnly ? { summary: true } : {}),
+    tables: tablesOut,
   };
   process.stdout.write(JSON.stringify(out, null, 2) + "\n");
+} else if (format === "csv") {
+  const chunks = [];
+  for (const t of selected) {
+    const body = tableToCsv(t);
+    chunks.push(selected.length > 1 ? `# table${t.index} (${t.rowCount}x${t.colCount})\n${body}` : body);
+  }
+  if (chunks.length) process.stdout.write(chunks.join("\n") + "\n");
+} else if (summaryOnly) {
+  if (!selected.length) process.stdout.write("(no tables)\n");
+  for (const t of selected.map(summarizeTable)) {
+    const merged = t.hasMerged ? " merged" : "";
+    const where = t.controlIndex != null ? ` ctrl ${t.controlIndex}` : ` nested in ${t.nestedIn}`;
+    const header = t.header.length ? `  ${t.header.join(" | ")}` : "";
+    process.stdout.write(`${t.index}  ${t.rowCount}×${t.colCount}${merged}  (s${t.section} p${t.paragraph}${where})${header}\n`);
+  }
 } else {
   // markdown — rendering lives in lib/render_md.mjs so the section extractor
   // can splice the same grid inline instead of a placeholder.
@@ -320,4 +341,29 @@ if (format === "json") {
   for (const t of selected) {
     process.stdout.write(renderTableMarkdown(t) + "\n");
   }
+}
+
+function headerRow(t) {
+  if (!t.grid?.[0]) return [];
+  return t.grid[0].filter((c) => c && c.origin).map((c) => String(c.text ?? "").trim());
+}
+
+function summarizeTable(t) {
+  const { grid, ...rest } = t;
+  return {
+    ...rest,
+    hasMerged: t.cellCount < t.rowCount * t.colCount,
+    header: headerRow(t),
+  };
+}
+
+function csvEscape(s) {
+  const t = String(s ?? "");
+  if (/[",\n\r]/.test(t)) return `"${t.replace(/"/g, '""')}"`;
+  return t;
+}
+
+function tableToCsv(t) {
+  const rows = t.grid || [];
+  return rows.map((row) => row.map((c) => csvEscape(c?.text ?? "")).join(",")).join("\n");
 }

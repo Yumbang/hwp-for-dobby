@@ -39,7 +39,7 @@ function runRead(args) {
 }
 
 test("strict mode (default): table cell values are NOT emitted to stdout", () => {
-  const r = runRead(["samples/fixture-table.hwp"]); // default --mode strict
+  const r = runRead(["samples/fixture-table.hwp", "--no-snapshot"]); // default --mode strict
   assert.equal(r.status, 0, `strict read must exit 0 (a table is not an error): ${r.stderr}`);
   for (const canary of TABLE_CELL_CANARIES) {
     assert.equal(
@@ -56,7 +56,7 @@ test("strict mode (default): table cell values are NOT emitted to stdout", () =>
 });
 
 test("strict mode: prints a loud stderr WARNING but still exits 0", () => {
-  const r = runRead(["samples/fixture-table.hwp"]);
+  const r = runRead(["samples/fixture-table.hwp", "--no-snapshot"]);
   assert.equal(r.status, 0);
   assert.match(r.stderr, /WARNING/, "strict must warn that tables are present and not flattened");
   assert.match(
@@ -67,7 +67,7 @@ test("strict mode: prints a loud stderr WARNING but still exits 0", () => {
 });
 
 test("strict mode: body text is preserved even though tables are withheld", () => {
-  const r = runRead(["samples/fixture-table.hwp"]);
+  const r = runRead(["samples/fixture-table.hwp", "--no-snapshot"]);
   assert.equal(r.status, 0);
   // Body paragraph text (outside any table) must survive — strict only
   // refuses to FLATTEN tables, it does not drop the document body.
@@ -78,7 +78,7 @@ test("strict mode: body text is preserved even though tables are withheld", () =
 });
 
 test("best-effort mode: flattened table cell values ARE emitted and the warning fires", () => {
-  const r = runRead(["samples/fixture-table.hwp", "--mode", "best-effort"]);
+  const r = runRead(["samples/fixture-table.hwp", "--mode", "best-effort", "--no-snapshot"]);
   assert.equal(r.status, 0, r.stderr);
   // Opt-in flattening: the canary cell value now appears inline.
   assert.ok(
@@ -97,8 +97,8 @@ test("best-effort mode: flattened table cell values ARE emitted and the warning 
 });
 
 test("strict vs best-effort: the table cell is the only difference for the canary value", () => {
-  const strict = runRead(["samples/fixture-table.hwp"]);
-  const best = runRead(["samples/fixture-table.hwp", "--mode", "best-effort"]);
+  const strict = runRead(["samples/fixture-table.hwp", "--no-snapshot"]);
+  const best = runRead(["samples/fixture-table.hwp", "--mode", "best-effort", "--no-snapshot"]);
   assert.equal(strict.status, 0);
   assert.equal(best.status, 0);
   // The exact contract: strict withholds, best-effort reveals.
@@ -109,8 +109,8 @@ test("strict vs best-effort: the table cell is the only difference for the canar
 test("cross-format: strict withholds the .hwpx merged cell, best-effort reveals it", () => {
   // fixture-table.hwpx merged data cell value.
   const CELL = "65,063,026,600";
-  const strict = runRead(["samples/fixture-table.hwpx"]);
-  const best = runRead(["samples/fixture-table.hwpx", "--mode", "best-effort"]);
+  const strict = runRead(["samples/fixture-table.hwpx", "--no-snapshot"]);
+  const best = runRead(["samples/fixture-table.hwpx", "--mode", "best-effort", "--no-snapshot"]);
   assert.equal(strict.status, 0, strict.stderr);
   assert.equal(best.status, 0, best.stderr);
   assert.equal(

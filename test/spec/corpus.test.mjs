@@ -126,7 +126,7 @@ test("corpus: every document survives read + extract_tables + outline", { skip: 
   for (const path of FILES) {
     const id = docLabel(path);
     for (const [script, args, allowed] of [
-      ["src/core/read.mjs", [path], [0, 1]],
+      ["src/core/read.mjs", [path, "--no-snapshot"], [0, 1]],
       ["src/core/extract_tables.mjs", [path], [0, 1]],
       ["src/core/sections.mjs", [path, "--op", "outline", "--no-cache"], [0, 1, 3]],
     ]) {

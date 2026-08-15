@@ -3,7 +3,8 @@
     "read/hwp-strict": {
       "script": "src/core/read.mjs",
       "argv": [
-        "samples/fixture-table.hwp"
+        "samples/fixture-table.hwp",
+        "--no-snapshot"
       ],
       "status": 0,
       "stdout": "[table: use extract_tables.mjs for data]\n(2010.1월 누계 기준/잠정)\n\n(단위 : 십억원)\n[table: use extract_tables.mjs for data]\n * 구성항목별 합계 및 차감금액은 소수점이하 단수조정으로 상이할 수 있음\n\n□ 관리대상수지(사회보장성기금* 제외수지)\n\n ㅇ 2,308십억원(통합재정수지) - 1,842십억원(사회보장성기금) = 466십억원\n\n   * 사회보장성기금(4개) : 국민연금기금, 사립학교교직원연금기금, 고용보험기금, 산업재해보상보험 및 예방기금\n\n\n[table: use extract_tables.mjs for data]\n(2010.2월 누계 기준/잠정)\n\n(단위 : 십억원)\n[table: use extract_tables.mjs for data]\n * 구성항목별 합계 및 차감금액은 소수점이하 단수조정으로 상이할 수 있음\n\n□ 관리대상수지(사회보장성기금* 제외수지)\n\n ㅇ △9,462십억원(통합재정수지) - 3,008십억원(사회보장성기금) = △12,470십억원\n\n   * 사회보장성기금(4개) : 국민연금기금, 사립학교교직원연금기금, 고용보험기금, 산업재해보상보험 및 예방기금\n\n\n[table: use extract_tables.mjs for data]\n(2010.3월 누계 기준/잠정)\n\n(단위 : 십억원)\n[table: use extract_tables.mjs for data]\n * 구성항목별 합계 및 차감금액은 소수점이하 단수조정으로 상이할 수 있음\n\n□ 관리대상수지(사회보장성기금* 제외수지)\n\n ㅇ △19,513십억원 = △7,020십억원(통합재정수지) - 12,493십억원(사회보장성기금) \n\n   * 사회보장성기금(4개) : 국민연금기금, 사립학교교직원연금기금, 고용보험기금, 산업재해보상보험 및 예방기금\n\n\n\n[table: use extract_tables.mjs for data]\n(2010.4월 누계 기준/잠정)\n\n(단위 : 십억원)\n[table: use extract_tables.mjs for data]\n * 구성항목별 합계 및 차감금액은 소수점이하 단수조정으로 상이할 수 있음\n\n□ 관리대상수지(사회보장성기금* 제외수지)\n\n ㅇ △13,635십억원 = 728십억원(통합재정수지) - 14,363십억원(사회보장성기금) \n\n   * 사회보장성기금(4개) : 국민연금기금, 사립학교교직원연금기금, 고용보험기금, 산업재해보상보험 및 예방기금\n\n\n\n\n[table: use extract_tables.mjs for data]\n(2010.5월 누계 기준/잠정)\n\n(단위 : 십억원)\n[table: use extract_tables.mjs for data]\n * 구성항목별 합계 및 차감금액은 소수점이하 단수조정으로 상이할 수 있음\n\n□ 관리대상수지(사회보장성기금* 제외수지)\n\n ㅇ △16,804십억원 = △337십억원(통합재정수지) - 16,467십억원(사회보장성기금) \n\n   * 사회보장성기금(4개) : 국민연금기금, 사립학교교직원연금기금, 고용보험기금, 산업재해보상보험 및 예방기금\n\n\n\n\n[table: use extract_tables.mjs for data]\n(2010.6월 누계 기준/잠정)\n\n(단위 : 십억원)\n[table: use extract_tables.mjs for data]\n * 구성항목별 합계 및 차감금액은 소수점이하 단수조정으로 상이할 수 있음\n\n□ 관리대상수지(사회보장성기금* 제외수지)\n\n ㅇ △29,449십억원 = △11,402십억원(통합재정수지) - 18,047십억원(사회보장성기금) \n\n   * 사회보장성기금(4개) : 국민연금기금, 사립학교교직원연금기금, 고용보험기금, 산업재해보상보험 및 예방기금\n",
@@ -14,7 +15,8 @@
       "argv": [
         "samples/fixture-table.hwp",
         "--mode",
-        "best-effort"
+        "best-effort",
+        "--no-snapshot"
       ],
       "status": 0,
       "stdout": "통 합 재 정 통 계\n(2010.1월 누계 기준/잠정)\n\n(단위 : 십억원)\n구   분\n일반 회계\n특별 회계\n세입\n세출외\n비금융성\n기    금\n기    업\n특별회계\n합  계\n수       입 (A)\n19,159\n727\n0\n4,899\n216\n25,002\n 경상수입\n19,124\n714\n0\n4,893\n215\n24,946\n 자본수입\n35\n13\n0\n6\n2\n56\n지출 및 순융자 (B)\n15,271\n2,528\n0\n4,235\n660\n22,694\n 경상지출\n14,707\n971\n0\n3,439\n658\n19,774\n 자본지출\n414\n1,107\n0\n106\n2\n1,629\n 순융자\n150\n450\n0\n690\n0\n1,290\n통합재정수지 (A-B)\n3,888\n△1,802\n0\n665\n△443\n2,308\n * 구성항목별 합계 및 차감금액은 소수점이하 단수조정으로 상이할 수 있음\n\n□ 관리대상수지(사회보장성기금* 제외수지)\n\n ㅇ 2,308십억원(통합재정수지) - 1,842십억원(사회보장성기금) = 466십억원\n\n   * 사회보장성기금(4개) : 국민연금기금, 사립학교교직원연금기금, 고용보험기금, 산업재해보상보험 및 예방기금\n\n\n통 합 재 정 통 계\n(2010.2월 누계 기준/잠정)\n\n(단위 : 십억원)\n구   분\n일반 회계\n특별 회계\n세입\n세출외\n비금융성\n기    금\n기    업\n특별회계\n합  계\n수       입 (A)\n26,680\n2,717\n9\n10,115\n328\n39,849\n 경상수입\n26,612\n2,678\n9\n10,026\n326\n39,651\n 자본수입\n68\n39\n0\n89\n3\n199\n지출 및 순융자 (B)\n31,855\n7,296\n0\n9,214\n947\n49,312\n 경상지출\n30,132\n2,165\n0\n7,182\n927\n40,406\n 자본지출\n1,544\n4,279\n0\n292\n21\n6,135\n 순융자\n180\n852\n0\n1,739\n0\n2,771\n통합재정수지 (A-B)\n△5,175\n△4,579\n9\n902\n△619\n△9,462\n * 구성항목별 합계 및 차감금액은 소수점이하 단수조정으로 상이할 수 있음\n\n□ 관리대상수지(사회보장성기금* 제외수지)\n\n ㅇ △9,462십억원(통합재정수지) - 3,008십억원(사회보장성기금) = △12,470십억원\n\n   * 사회보장성기금(4개) : 국민연금기금, 사립학교교직원연금기금, 고용보험기금, 산업재해보상보험 및 예방기금\n\n\n통 합 재 정 통 계\n(2010.3월 누계 기준/잠정)\n\n(단위 : 십억원)\n구   분\n일반 회계\n특별 회계\n세입\n세출외\n비금융성\n기    금\n기    업\n특별회계\n합  계\n수       입 (A)\n47,336\n4,014\n10\n25,482\n757\n77,599\n 경상수입\n47,238\n3,931\n10\n25,324\n754\n77,258\n 자본수입\n98\n82\n0\n158\n3\n340\n지출 및 순융자 (B)\n51,353\n12,538\n1\n19,487\n1,240\n84,619\n 경상지출\n48,434\n4,324\n1\n17,355\n1,186\n71,300\n 자본지출\n2,722\n7,502\n0\n447\n54\n10,725\n 순융자\n196\n712\n0\n1,685\n0\n2,593\n통합재정수지 (A-B)\n△4,017\n△8,524\n8\n5,995\n△483\n△7,020\n * 구성항목별 합계 및 차감금액은 소수점이하 단수조정으로 상이할 수 있음\n\n□ 관리대상수지(사회보장성기금* 제외수지)\n\n ㅇ △19,513십억원 = △7,020십억원(통합재정수지) - 12,493십억원(사회보장성기금) \n\n   * 사회보장성기금(4개) : 국민연금기금, 사립학교교직원연금기금, 고용보험기금, 산업재해보상보험 및 예방기금\n\n\n\n통 합 재 정 통 계\n(2010.4월 누계 기준/잠정)\n\n(단위 : 십억원)\n구   분\n일반 회계\n특별 회계\n세입\n세출외\n비금융성\n기    금\n기    업\n특별회계\n합  계\n수       입 (A)\n71,363\n5,245\n10\n30,394\n1,154\n108,165\n 경상수입\n70,616\n5,059\n10\n30,170\n1,151\n107,005\n 자본수입\n747\n186\n0\n224\n3\n1,160\n지출 및 순융자 (B)\n66,445\n15,654\n737\n23,255\n1,347\n107,437\n 경상지출\n62,645\n5,055\n737\n20,230\n1,254\n89,920\n 자본지출\n3,593\n9,444\n0\n584\n93\n13,715\n 순융자\n208\n1,155\n0\n2,440\n0\n3,803\n통합재정수지 (A-B)\n4,918\n△10,409\n△727\n7,139\n△193\n728\n * 구성항목별 합계 및 차감금액은 소수점이하 단수조정으로 상이할 수 있음\n\n□ 관리대상수지(사회보장성기금* 제외수지)\n\n ㅇ △13,635십억원 = 728십억원(통합재정수지) - 14,363십억원(사회보장성기금) \n\n   * 사회보장성기금(4개) : 국민연금기금, 사립학교교직원연금기금, 고용보험기금, 산업재해보상보험 및 예방기금\n\n\n\n\n통 합 재 정 통 계\n(2010.5월 누계 기준/잠정)\n\n(단위 : 십억원)\n구   분\n일반 회계\n특별 회계\n세입\n세출외\n비금융성\n기    금\n기    업\n특별회계\n합  계\n수       입 (A)\n83,250\n6,695\n12\n35,685\n1,309\n126,952\n 경상수입\n82,477\n6,385\n12\n35,370\n1,306\n125,549\n 자본수입\n773\n310\n0\n315\n3\n1,402\n지출 및 순융자 (B)\n79,300\n18,731\n737\n27,069\n1,451\n127,288\n 경상지출\n74,825\n6,247\n737\n23,577\n1,330\n106,716\n 자본지출\n4,268\n11,125\n0\n752\n120\n16,265\n 순융자\n208\n1,359\n0\n2,740\n0\n4,307\n통합재정수지 (A-B)\n3,950\n△12,036\n△725\n8,615\n△142\n△337\n * 구성항목별 합계 및 차감금액은 소수점이하 단수조정으로 상이할 수 있음\n\n□ 관리대상수지(사회보장성기금* 제외수지)\n\n ㅇ △16,804십억원 = △337십억원(통합재정수지) - 16,467십억원(사회보장성기금) \n\n   * 사회보장성기금(4개) : 국민연금기금, 사립학교교직원연금기금, 고용보험기금, 산업재해보상보험 및 예방기금\n\n\n\n\n통 합 재 정 통 계\n(2010.6월 누계 기준/잠정)\n\n(단위 : 십억원)\n구   분\n일반 회계\n특별 회계\n세입\n세출외\n비금융성\n기    금\n기    업\n특별회계\n합  계\n수       입 (A)\n93,201\n7,603\n12\n40,994\n1,463\n143,273\n 경상수입\n92,388\n7,227\n12\n40,585\n1,459\n141,671\n 자본수입\n813\n376\n0\n409\n4\n1,602\n지출 및 순융자 (B)\n96,053\n23,970\n769\n32,285\n1,598\n154,675\n 경상지출\n89,689\n7,880\n769\n28,067\n1,439\n127,844\n 자본지출\n6,154\n14,540\n0\n1,019\n159\n21,873\n 순융자\n210\n1,549\n0\n3,199\n0\n4,958\n통합재정수지 (A-B)\n△2,852\n△16,367\n△757\n8,709\n△135\n△11,402\n * 구성항목별 합계 및 차감금액은 소수점이하 단수조정으로 상이할 수 있음\n\n□ 관리대상수지(사회보장성기금* 제외수지)\n\n ㅇ △29,449십억원 = △11,402십억원(통합재정수지) - 18,047십억원(사회보장성기금) \n\n   * 사회보장성기금(4개) : 국민연금기금, 사립학교교직원연금기금, 고용보험기금, 산업재해보상보험 및 예방기금\n",
@@ -23,7 +25,8 @@
     "read/hwpx-strict": {
       "script": "src/core/read.mjs",
       "argv": [
-        "samples/fixture-table.hwpx"
+        "samples/fixture-table.hwpx",
+        "--no-snapshot"
       ],
       "status": 0,
       "stdout": "[table: use extract_tables.mjs for data]\n",
@@ -34,7 +37,8 @@
       "argv": [
         "samples/fixture-table.hwpx",
         "--mode",
-        "best-effort"
+        "best-effort",
+        "--no-snapshot"
       ],
       "status": 0,
       "stdout": "기부 금액(원, %)\n기부 건수(건, %)\n2023년\n2024년 \n2025년\n2024년 대비 증감\n2023년\n2024년 \n2025년\n2024년 대비 증감\n65,063,026,600\n87,804,677,338\n151,459,074,040\n72.5\n526.278\n772,712\n1,391,874\n80.0\n",
@@ -43,7 +47,8 @@
     "read/form-no-tables": {
       "script": "src/core/read.mjs",
       "argv": [
-        "samples/fixture-form.hwp"
+        "samples/fixture-form.hwp",
+        "--no-snapshot"
       ],
       "status": 0,
       "stdout": "\n\n\n\n\n\n\n\n\n\n\n\n\n",
@@ -58,7 +63,8 @@
         "--page",
         "all",
         "--mode",
-        "strict"
+        "strict",
+        "--no-snapshot"
       ],
       "status": 0,
       "stdout": "[table: use extract_tables.mjs for data]\n(2010.1월 누계 기준/잠정)\n\n(단위 : 십억원)\n[table: use extract_tables.mjs for data]\n * 구성항목별 합계 및 차감금액은 소수점이하 단수조정으로 상이할 수 있음\n\n□ 관리대상수지(사회보장성기금* 제외수지)\n\n ㅇ 2,308십억원(통합재정수지) - 1,842십억원(사회보장성기금) = 466십억원\n\n   * 사회보장성기금(4개) : 국민연금기금, 사립학교교직원연금기금, 고용보험기금, 산업재해보상보험 및 예방기금\n\n\n[table: use extract_tables.mjs for data]\n(2010.2월 누계 기준/잠정)\n\n(단위 : 십억원)\n[table: use extract_tables.mjs for data]\n * 구성항목별 합계 및 차감금액은 소수점이하 단수조정으로 상이할 수 있음\n\n□ 관리대상수지(사회보장성기금* 제외수지)\n\n ㅇ △9,462십억원(통합재정수지) - 3,008십억원(사회보장성기금) = △12,470십억원\n\n   * 사회보장성기금(4개) : 국민연금기금, 사립학교교직원연금기금, 고용보험기금, 산업재해보상보험 및 예방기금\n\n\n[table: use extract_tables.mjs for data]\n(2010.3월 누계 기준/잠정)\n\n(단위 : 십억원)\n[table: use extract_tables.mjs for data]\n * 구성항목별 합계 및 차감금액은 소수점이하 단수조정으로 상이할 수 있음\n\n□ 관리대상수지(사회보장성기금* 제외수지)\n\n ㅇ △19,513십억원 = △7,020십억원(통합재정수지) - 12,493십억원(사회보장성기금) \n\n   * 사회보장성기금(4개) : 국민연금기금, 사립학교교직원연금기금, 고용보험기금, 산업재해보상보험 및 예방기금\n\n\n\n[table: use extract_tables.mjs for data]\n(2010.4월 누계 기준/잠정)\n\n(단위 : 십억원)\n[table: use extract_tables.mjs for data]\n * 구성항목별 합계 및 차감금액은 소수점이하 단수조정으로 상이할 수 있음\n\n□ 관리대상수지(사회보장성기금* 제외수지)\n\n ㅇ △13,635십억원 = 728십억원(통합재정수지) - 14,363십억원(사회보장성기금) \n\n   * 사회보장성기금(4개) : 국민연금기금, 사립학교교직원연금기금, 고용보험기금, 산업재해보상보험 및 예방기금\n\n\n\n\n[table: use extract_tables.mjs for data]\n(2010.5월 누계 기준/잠정)\n\n(단위 : 십억원)\n[table: use extract_tables.mjs for data]\n * 구성항목별 합계 및 차감금액은 소수점이하 단수조정으로 상이할 수 있음\n\n□ 관리대상수지(사회보장성기금* 제외수지)\n\n ㅇ △16,804십억원 = △337십억원(통합재정수지) - 16,467십억원(사회보장성기금) \n\n   * 사회보장성기금(4개) : 국민연금기금, 사립학교교직원연금기금, 고용보험기금, 산업재해보상보험 및 예방기금\n\n\n\n\n[table: use extract_tables.mjs for data]\n(2010.6월 누계 기준/잠정)\n\n(단위 : 십억원)\n[table: use extract_tables.mjs for data]\n * 구성항목별 합계 및 차감금액은 소수점이하 단수조정으로 상이할 수 있음\n\n□ 관리대상수지(사회보장성기금* 제외수지)\n\n ㅇ △29,449십억원 = △11,402십억원(통합재정수지) - 18,047십억원(사회보장성기금) \n\n   * 사회보장성기금(4개) : 국민연금기금, 사립학교교직원연금기금, 고용보험기금, 산업재해보상보험 및 예방기금\n",
@@ -67,7 +73,8 @@
     "read/memo-auto-surfaced": {
       "script": "src/core/read.mjs",
       "argv": [
-        "samples/fixture-memo.hwpx"
+        "samples/fixture-memo.hwpx",
+        "--no-snapshot"
       ],
       "status": 0,
       "stdout": "[table: use extract_tables.mjs for data]\n테스트 메모입니다\n\n─── 메모 / memos (1) ───\n[1] 테스트 메모입니다\n",
@@ -156,7 +163,7 @@
       "argv": [],
       "status": 2,
       "stdout": "",
-      "stderr": "usage: read.mjs <input.hwp|.hwpx> [--format text|svg] [--page N|all] [--mode strict|best-effort]\n       read.mjs <input.hwp|.hwpx> --memos [--format text|json]\n"
+      "stderr": "usage: read.mjs <input.hwp|.hwpx> [--format text|svg] [--page N|all] [--mode strict|best-effort]\n       [--no-snapshot] [--snapshot-dir <dir>] [--max-chars N]\n       read.mjs <input.hwp|.hwpx> --memos [--format text|json]\n"
     },
     "read/leading-flag": {
       "script": "src/core/read.mjs",
@@ -165,7 +172,7 @@
       ],
       "status": 2,
       "stdout": "",
-      "stderr": "usage: read.mjs <input.hwp|.hwpx> [--format text|svg] [--page N|all] [--mode strict|best-effort]\n       read.mjs <input.hwp|.hwpx> --memos [--format text|json]\n"
+      "stderr": "usage: read.mjs <input.hwp|.hwpx> [--format text|svg] [--page N|all] [--mode strict|best-effort]\n       [--no-snapshot] [--snapshot-dir <dir>] [--max-chars N]\n       read.mjs <input.hwp|.hwpx> --memos [--format text|json]\n"
     },
     "read/bad-format": {
       "script": "src/core/read.mjs",
@@ -392,7 +399,7 @@
       "argv": [],
       "status": 2,
       "stdout": "",
-      "stderr": "usage: extract_tables.mjs <input.hwp|.hwpx> [--format json|markdown] [--table N] [--fill-merged] [--no-nested] [--max-depth N] [--data-tables-only] [--drop-empty] [--detect-form-type]\n"
+      "stderr": "usage: extract_tables.mjs <input.hwp|.hwpx> [--format json|markdown|csv] [--table N] [--fill-merged] [--no-nested] [--max-depth N] [--data-tables-only] [--drop-empty] [--detect-form-type] [--summary]\n"
     },
     "tables/bad-format": {
       "script": "src/core/extract_tables.mjs",
@@ -403,7 +410,7 @@
       ],
       "status": 2,
       "stdout": "",
-      "stderr": "unknown --format: xml (expected json|markdown)\n"
+      "stderr": "unknown --format: xml (expected json|markdown|csv)\n"
     },
     "tables/table-index-missing-value": {
       "script": "src/core/extract_tables.mjs",

@@ -16,7 +16,7 @@ This skill views, edits, fills, and creates HWP and HWPX documents — the forma
 
 | Tier | Scripts | Runs on |
 |---|---|---|
-| **core** (`src/core/`) | read, sections, extract_tables, info, replace, edit_text, edit_cell, table, format, header_footer, footnote, fill_form, unlock, create | **WASM only → every platform** (claude.ai, cowork, Claude Code). No install, no binary. |
+| **core** (`src/core/`) | read, sections, extract_tables, extract_data, search, info, replace, edit_text, edit_cell, table, format, header_footer, footnote, fill_form, unlock, create | **WASM only → every platform** (claude.ai, cowork, Claude Code). No install, no binary. |
 | **enhanced** (`src/enhanced/`) | render (PNG), export_pdf, read_precise (CLI text/markdown), debug (ir-diff/dump) | **native rhwp CLI → Claude Code only.** Degrades with exit 4 + a clear message elsewhere. |
 
 All read/edit/create works everywhere on the core tier. The enhanced tier only adds vision-grade PNG, PDF, precise extraction, and IR debugging, and only when the `rhwp` binary is on `PATH` (or `$RHWP_BIN`). If an enhanced script exits `4`, you're not on Claude Code or the binary isn't installed — fall back to a core script and tell the user.
@@ -29,20 +29,22 @@ Output is **always HWP 5.0 (`.hwp`)**. Native HWPX save is rejected by Hancom Of
 
 | Task | Command |
 |---|---|
-| Inspect an unfamiliar file | `node src/core/info.mjs <in> [--validate]` |
-| Read body text | `node src/core/read.mjs <in> --format text` |
+| Inspect an unfamiliar file | `node src/core/info.mjs <in> [--validate]` then `extract_tables.mjs --summary` (table sizes, no cell text) |
+| Read body text | `node src/core/read.mjs <in> --format text` (default: section snapshot + since-last-read diff on stderr; `--no-snapshot` to skip; `--max-chars N` truncates honestly) |
 | Read memos (메모/주석) | `node src/core/read.mjs <in> --memos` |
 | Read tracked changes (변경 내용 추적) | `node src/core/read.mjs <in> --track-changes [--format text\|json]` |
 | **Document STRUCTURE** (outline · §4.3 · split · diff) | `node src/core/sections.mjs <in> --op outline\|extract\|split\|snapshot\|diff [--id 2.3.1\|제12조\|T0] [--out-dir <dir>]` |
-| **Extract table DATA (safe)** | `node src/core/extract_tables.mjs <in> [--format json\|markdown] [--data-tables-only] [--drop-empty] [--detect-form-type]` |
+| **Extract table DATA (safe)** | `node src/core/extract_tables.mjs <in> [--format json\|markdown\|csv] [--summary] [--table N] [--data-tables-only] [--drop-empty] [--detect-form-type]` |
+| Search with page/cell address | `node src/core/search.mjs <in> --query <q> [--limit N] [--format json]` (0 hits = exit 0) |
+| Dates / amounts with address | `node src/core/extract_data.mjs <in> [--kind date\|amount\|number\|all]` |
 | Find & replace (safe, saves) | `node src/core/replace.mjs <in> --query <q> --replacement <r> --output <out.hwp>` |
 | Insert/delete body text | `node src/core/edit_text.mjs <in> --op insert\|delete\|insert-paragraph ... --output <out.hwp>` |
-| Edit a table cell | `node src/core/edit_cell.mjs <in> --op insert\|delete\|set --section N --paragraph N --control N (--cell N\|--row R --col C) --text "..." --output <out.hwp>` |
+| Edit a table cell | `node src/core/edit_cell.mjs <in> --op set --table N --row R --col C --text "..." --output <out.hwp>` (same `index` as extract_tables; or `--section/--paragraph/--control`) |
 | Create/merge/split a table | `node src/core/table.mjs <in> --op create\|merge\|split ... --output <out.hwp>` |
 | Char/paragraph formatting | `node src/core/format.mjs <in> --op char\|para ... --props '<json>' --output <out.hwp>` |
 | Header/footer | `node src/core/header_footer.mjs <in> --op create\|apply ... --output <out.hwp>` |
 | Footnote | `node src/core/footnote.mjs <in> --op insert\|delete ... --output <out.hwp>` |
-| List / fill form fields | `node src/core/fill_form.mjs <in> --list` · `... --values vals.json --output <out.hwp>` |
+| List / fill form fields | `node src/core/fill_form.mjs <in> --list` · `--values vals.json --output <out.hwp>` · duplicate names use `name[N]` · `--dry-run` · `--rows file.jsonl --out-dir dir/` |
 | Unlock read-only doc | `node src/core/unlock.mjs <in> --output <out.hwp>` |
 | Build a doc from scratch | `node src/core/create.mjs --plan plan.json --output <out.hwp>` |
 | **Vision-quality PNG** (code) | `node src/enhanced/render.mjs <in> --page N --output page.png` |
@@ -68,9 +70,11 @@ The rhwp WASM bundle ships vendored under `vendor/rhwp/` — no `npm install` ne
 ## Reading & extraction
 
 - **`info.mjs`** — JSON summary (pages, sections, sourceFormat, fonts, dimensions, hasTable, **memoCount**, field count, engine version). `--validate` adds `getValidationWarnings()` so you can spot a structurally suspect source before extracting.
-- **`read.mjs`** — body text (WASM). **Strict by default**: it does NOT flatten tables (which would misplace merged-cell text); each table becomes a `[table: use extract_tables.mjs for data]` marker plus a stderr warning. `--mode best-effort` flattens inline (with a warning) if you really want it. `--format svg --page N` for a quick visual preview. **Memos surface automatically**: if the document has memos (메모/주석), a plain read appends a `─── 메모 / memos (N) ───` section after the body (the engine hides memos from normal extraction, so this prevents missing them). `--memos` prints only the memos — each with its text **and the body span it is anchored to** (`anchor`) — as JSON, or as `--format text`.
+- **`read.mjs`** — body text (WASM). **Strict by default**: it does NOT flatten tables (which would misplace merged-cell text); each table becomes a `[table: use extract_tables.mjs for data]` marker plus a stderr warning. `--mode best-effort` flattens inline (with a warning) if you really want it. `--format svg --page N` for a quick visual preview. **Every text read snapshots the inferred section tree** (same baseline as `sections.mjs --op snapshot`, next to the document in `.hwp-snapshots/`). The first read records it; later reads print a since-last-read `+/-/~/M` report on **stderr** and then write a new baseline, so "what changed?" means "since I last looked". `--no-snapshot` opts out; `--snapshot-dir` moves the root. A document with no detectable structure skips the snapshot rather than inventing a tree, and a snapshot failure never fails the read. **Memos surface automatically**: if the document has memos (메모/주석), a plain read appends a `─── 메모 / memos (N) ───` section after the body (the engine hides memos from normal extraction, so this prevents missing them). `--memos` prints only the memos — each with its text **and the body span it is anchored to** (`anchor`) — as JSON, or as `--format text`. `--memos`, `--track-changes` and `--format svg` do not snapshot (they are not a body read).
 - **`read.mjs --track-changes`** — tracked changes (변경 내용 추적) are the memo problem one degree worse: **deleted text is still physically in the paragraph records**, so a plain read prints text the author already removed, inlined with the live body and indistinguishable from it. A plain read now emits a stderr WARNING (with insertion/deletion counts) when — and only when — the document really has them; do not treat that output as the document's final text. `--track-changes` lists each change (kind / author / covered text / location), `--format json` for the full verdict. **HWPX cannot be scanned**: the answer is `NOT CHECKED`, which is not `none`.
-- **`extract_tables.mjs`** — the ONLY safe way to read table data. Rebuilds the grid by cell `{row,col,rowSpan,colSpan}` so a merged cell never leaks onto the wrong record. Flags: `--data-tables-only` (drop legend/작성요령 tables by header keyword, conservative), `--drop-empty` (normalize placeholders 번호/해당없음/-/X to ""), `--detect-form-type` (annotate marker ①②/label/plain), `--fill-merged`, `--table N`, `--no-nested`.
+- **`extract_tables.mjs`** — the ONLY safe way to read table data. Rebuilds the grid by cell `{row,col,rowSpan,colSpan}` so a merged cell never leaks onto the wrong record. Flags: `--summary` (sizes + first-row headers, **no cell data** — use this before pulling a grid), `--format csv` (rectangular grid, covered cells empty unless `--fill-merged`), `--data-tables-only` (drop legend/작성요령 tables by header keyword, conservative), `--drop-empty` (normalize placeholders 번호/해당없음/-/X to ""), `--detect-form-type` (annotate marker ①②/label/plain), `--fill-merged`, `--table N`, `--no-nested`. Do **not** dump every table of an unfamiliar file; `--summary` first, then `--table N`.
+- **`search.mjs`** — `searchAllText` plus page and cell coordinates. 0 matches is exit 0. `--limit` sets `truncated` / `totalMatchCount` rather than pretending the rest did not exist.
+- **`extract_data.mjs`** — dates and KRW amounts with the same addresses. `normalized: null` means we did not guess.
 - **`read_precise.mjs`** (enhanced) — accurate text/markdown via the CLI, with real table grids in markdown. Use on Claude Code when you need a faithful markdown rendering.
 
 ### Document structure — `sections.mjs`
@@ -107,8 +111,8 @@ node src/core/sections.mjs <in> --op diff                    # what changed sinc
 
 Every editing script (`edit_text`, `edit_cell`, `table`, `format`, `header_footer`, `footnote`, `fill_form`, `unlock`, `create`) follows the same contract: edit → atomic `.hwp` save → reload → verify → report `verified`. A `verified: false` result is a **failed task** (exit 5), never reported as success.
 
-- **`fill_form.mjs`** — `--list` shows fields; `--values` fills them. **Empty fields fill cleanly.** Filling a **pre-populated** field warns about upstream bug #838 (char-shape not shifted → Hancom may reject) — visually verify those with `render.mjs`.
-- **`edit_cell.mjs`** — address a cell by linear `--cell` index or by `--row/--col`. Out-of-range cell index is caught and reported (the raw engine call would throw).
+- **`fill_form.mjs`** — `--list` shows fields (`occurrence` / `sameNameCount`). `--values` fills them. A name that appears more than once must be written `name[N]` or the fill is refused as ambiguous — never silently fill only the first. `--dry-run` writes nothing. `--rows` + `--out-dir` fills one output per data row. **Empty fields fill cleanly.** Filling a **pre-populated** field warns about upstream bug #838 (char-shape not shifted → Hancom may reject) — visually verify those with `render.mjs`.
+- **`edit_cell.mjs`** — `--table N` uses the same index as `extract_tables` (top-level tables). Or `--section/--paragraph/--control`. Address a cell by linear `--cell` index or by `--row/--col`. Out-of-range cell index is caught and reported (the raw engine call would throw). Covered (merged-away) positions are NOT_FOUND with a pointer at the origin.
 - **`create.mjs`** — replays a JSON plan (`insert_text`, `insert_paragraph`, `create_table`, `insert_text_in_cell`) against a fresh blank document.
 
 ## Verify outputs after every run

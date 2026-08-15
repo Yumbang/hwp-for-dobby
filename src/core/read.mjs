@@ -2,6 +2,7 @@
 // Usage:
 //   node src/core/read.mjs <input.hwp|.hwpx> [--format text|svg] [--page N|all]
 //                                            [--mode strict|best-effort]
+//                                            [--no-snapshot] [--snapshot-dir <dir>] [--max-chars N]
 //   node src/core/read.mjs <input.hwp|.hwpx> --memos [--format text|json]
 //   node src/core/read.mjs <input.hwp|.hwpx> --track-changes [--format text|json]
 //
@@ -63,9 +64,18 @@
 // for symmetry but only narrows SVG output.
 //
 // All extracted text is NFC-normalized (spec §21). Output goes to stdout.
+//
+// SNAPSHOT (default on a text read): after printing the body, compare this
+// document's inferred sections against the last read and then write a new
+// baseline. "What changed?" means "since I last looked", not "since the first
+// time anyone snapshotted this file". The report goes to stderr so stdout
+// stays the document. --memos / --track-changes / --format svg skip this
+// (they are not a body read). --no-snapshot opts out. A missing structure or
+// a failed snapshot never fails the read.
 
 import { loadDocument } from "../lib/_bootstrap.mjs";
 import { flag as hasFlag } from "../lib/argv.mjs";
+import { reportReadSnapshot } from "../lib/section_diff.mjs";
 import {
   documentHasTable,
   eachParagraph,
@@ -105,13 +115,14 @@ async function loadOrExit(path) {
 
 const PLACEHOLDER = "[table: use extract_tables.mjs for data]";
 
+const USAGE =
+  "usage: read.mjs <input.hwp|.hwpx> [--format text|svg] [--page N|all] [--mode strict|best-effort]\n" +
+  "       [--no-snapshot] [--snapshot-dir <dir>] [--max-chars N]\n" +
+  "       read.mjs <input.hwp|.hwpx> --memos [--format text|json]";
+
 const inputPath = process.argv[2];
 if (!inputPath || inputPath.startsWith("--")) {
-  fail(
-    EXIT.USAGE,
-    "usage: read.mjs <input.hwp|.hwpx> [--format text|svg] [--page N|all] [--mode strict|best-effort]\n" +
-      "       read.mjs <input.hwp|.hwpx> --memos [--format text|json]",
-  );
+  fail(EXIT.USAGE, USAGE);
 }
 
 // ── MEMOS ───────────────────────────────────────────────────────────────────
@@ -216,7 +227,7 @@ if (mode !== "strict" && mode !== "best-effort") {
 // This is the corrupting path the strict mode refuses: cells are emitted in
 // origin order with NO grid reconstruction, so merged cells land wherever
 // they serialize. Lines are written directly to stdout.
-function flattenTableInline(doc, s, p, ctrl) {
+function flattenTableInline(doc, s, p, ctrl, writeLine) {
   const loc = flatLoc(s, p, ctrl);
   let dim;
   try {
@@ -224,9 +235,10 @@ function flattenTableInline(doc, s, p, ctrl) {
   } catch {
     return;
   }
+  const write = writeLine ?? ((t) => process.stdout.write(t + "\n"));
   for (let k = 0; k < dim.cellCount; k++) {
     const t = readCellText(doc, loc, k);
-    if (t.length) process.stdout.write(t + "\n");
+    if (t.length) write(t);
   }
 }
 
@@ -279,6 +291,17 @@ if (format === "svg") {
   }
 
   const doc = await loadOrExit(inputPath);
+  const skipSnapshot = hasFlag("--no-snapshot");
+  const snapshotDir = arg("--snapshot-dir", null);
+  const maxCharsRaw = arg("--max-chars", null);
+  let maxChars = null;
+  if (maxCharsRaw != null) {
+    const n = Number(maxCharsRaw);
+    if (!Number.isInteger(n) || n < 1) {
+      fail(EXIT.USAGE, `error: --max-chars must be an integer >= 1 (got ${JSON.stringify(maxCharsRaw)})`);
+    }
+    maxChars = n;
+  }
   const hasTable = documentHasTable(doc);
 
   // strict refuses to flatten tables (anti-silent-corruption default).
@@ -306,6 +329,27 @@ if (format === "svg") {
   // Walk every paragraph. A paragraph either hosts table control(s) or holds
   // plain body text — emit accordingly so a table's content is never glued
   // into the body stream by accident.
+  let emitted = 0;
+  let omitted = 0;
+  let cut = false;
+  const writeBody = (chunk) => {
+    const line = chunk.endsWith("\n") ? chunk : chunk + "\n";
+    if (maxChars == null || !cut) {
+      if (maxChars == null || emitted + line.length <= maxChars) {
+        process.stdout.write(line);
+        emitted += line.length;
+        return;
+      }
+      const room = maxChars - emitted;
+      if (room > 0) process.stdout.write(line.slice(0, room));
+      emitted += Math.max(0, room);
+      omitted += line.length - Math.max(0, room);
+      cut = true;
+    } else {
+      omitted += line.length;
+    }
+  };
+
   for (const { s, p } of eachParagraph(doc)) {
     const tableCtrls = tableControlsInParagraph(doc, s, p);
 
@@ -316,20 +360,26 @@ if (format === "svg") {
     if (tableCtrls.length === 0) {
       // Plain paragraph: emit body text (may be empty → blank line, which
       // preserves paragraph spacing in the output stream).
-      process.stdout.write(body + "\n");
+      writeBody(body);
       continue;
     }
 
     // Table-hosting paragraph. Emit any leading body text, then handle each
     // table per the active mode.
-    if (body.length) process.stdout.write(body + "\n");
+    if (body.length) writeBody(body);
     for (const ctrl of tableCtrls) {
       if (mode === "strict") {
-        process.stdout.write(PLACEHOLDER + "\n");
+        writeBody(PLACEHOLDER);
       } else {
-        flattenTableInline(doc, s, p, ctrl);
+        flattenTableInline(doc, s, p, ctrl, writeBody);
       }
     }
+  }
+
+  if (cut) {
+    process.stderr.write(
+      `read: truncated — omitted ${omitted} character(s) (--max-chars ${maxChars})\n`,
+    );
   }
 
   // Memos (메모/주석) are invisible to body-text extraction and an edit to their
@@ -351,5 +401,11 @@ if (format === "svg") {
       process.stdout.write(`[${m.id ?? m.index}] ${m.text}\n`);
       if (m.anchor) process.stdout.write(`      ↳ 본문/anchored to: "${m.anchor}"\n`);
     }
+  }
+
+  // After the body: last-read section diff, then a fresh baseline. Never
+  // blocks the read — a snapshot failure is a note, not a failed extraction.
+  if (!skipSnapshot) {
+    await reportReadSnapshot(inputPath, { doc, snapshotDir });
   }
 }
