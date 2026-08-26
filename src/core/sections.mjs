@@ -47,7 +47,9 @@ import { enumArg, flag, inputPath, intArg, strArg } from "../lib/argv.mjs";
 import { buildBlocks } from "../lib/blocks.mjs";
 import { cacheKey, readCache, writeCache } from "../lib/cache.mjs";
 import { EXIT, fail } from "../lib/exit-codes.mjs";
+import { createHash } from "node:crypto";
 import { detectHeadings } from "../lib/headings.mjs";
+import { collectObjects } from "../lib/objects.mjs";
 import { detectMemos } from "../lib/memo.mjs";
 import {
   NO_CHANGES_LINE,
@@ -445,13 +447,49 @@ function currentMeta() {
   };
 }
 
+// Per-node image digests, so a swapped figure is a change even though the
+// section's TEXT is byte-identical (the picture marker describes the frame,
+// which a replacement preserves on purpose). Reading the bytes measured 12.8 ms
+// for 10 MB across 13 pictures, so it is affordable at snapshot time — and it
+// is paid ONLY here, never on an ordinary read.
+async function imageDigestsByNode() {
+  const m = await ensureModel();
+  const byNode = {};
+  let all = [];
+  try {
+    const collected = await collectObjects(m.doc, { geometry: "never" });
+    all = [...collected.objects, ...collected.overlays].filter((o) => o.kind === "image");
+  } catch {
+    return byNode; // no digests is "not collected", which compares equal to absent
+  }
+  if (!all.length) return byNode;
+
+  for (const [i, n] of nodes.entries()) {
+    const { start, end } = spanOf(i, false);
+    const from = blocks[start] ? blocks[start].p : -1;
+    const to = blocks[end] ? blocks[end].p : -1;
+    const mine = all.filter((o) => o.paragraph >= from && o.paragraph <= to);
+    if (!mine.length) continue;
+    byNode[n.id] = mine.map((o) => {
+      try {
+        const bytes = m.doc.getControlImageData(o.section, o.paragraph, "", o.controlIndex);
+        return createHash("sha256").update(bytes).digest("hex").slice(0, 16);
+      } catch {
+        return "unreadable";
+      }
+    });
+  }
+  return byNode;
+}
+
 async function currentBaseline() {
   await ensureModel(); // sourceFormat and own-text rendering both need the document
   const ownText = {};
   for (let i = 0; i < nodes.length; i++) {
     ownText[nodes[i].id] = await renderNode(i, false);
   }
-  return buildBaseline({ nodes: tree, ownText, meta: currentMeta() });
+  const objects = await imageDigestsByNode();
+  return buildBaseline({ nodes: tree, ownText, objects, meta: currentMeta() });
 }
 
 if (op === "snapshot") {

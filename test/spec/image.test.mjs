@@ -364,3 +364,30 @@ test("replace: an existing crop is carried across the swap", async () => {
     assert.deepEqual(j.confirmed.crop, j.preserved.crop, "the user's crop must survive the swap");
   });
 });
+
+// ── the read path and the edit path must describe the same document the same way
+
+test("vocabulary: --op list reports the same placement the reader renders", async () => {
+  // These drifted apart once already: list said "floating (not treated as a
+  // character)" while a read of the same picture said "beside". Two words for
+  // one state is how an agent comes to believe there are two states.
+  const { loadDocument } = await import("../../src/lib/_bootstrap.mjs");
+  const { buildBlocks } = await import("../../src/lib/blocks.mjs");
+  const listed = listOf(FIXTURE).images;
+  const doc = await loadDocument(join(ROOT, FIXTURE));
+  const model = await buildBlocks(doc, {});
+  const rendered = model.renderSpan(0, model.blocks.length - 1);
+
+  for (const img of listed) {
+    assert.ok(
+      ["inline", "block", "beside", "overlay"].includes(img.placement),
+      `list produced an unknown placement: ${img.placement}`,
+    );
+    if (img.placement !== "overlay") {
+      assert.ok(
+        rendered.includes(`· ${img.placement}]`),
+        `the reader never renders "${img.placement}", which --op list reports`,
+      );
+    }
+  }
+});

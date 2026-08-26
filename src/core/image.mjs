@@ -44,6 +44,7 @@ import { enumArg, flag, inputPath, intArg, strArg } from "../lib/argv.mjs";
 import { controlOffsets, eachParagraph } from "../lib/doc_walk.mjs";
 import { EXIT, fail } from "../lib/exit-codes.mjs";
 import { describeFit, fitToWidth, hwpUnitToMm, usableWidth } from "../lib/image_layout.mjs";
+import { classifyPlacement } from "../lib/objects.mjs";
 import { assertMemoSafe } from "../lib/memo.mjs";
 import { assertTrackChangeSafe } from "../lib/trackchange.mjs";
 import { exportVerify } from "../lib/verify.mjs";
@@ -239,14 +240,20 @@ function writeCaption(doc, s, p, c, text) {
 // silently re-anchoring somebody's deliberately-placed logo would be its own
 // kind of damage.
 
+// The SAME vocabulary the read path uses (lib/objects.mjs). Two words for one
+// state is how an agent ends up believing there are two states: `--op list`
+// used to say "floating (not treated as a character)" while a read of the same
+// document said "beside".
 function hazardsOf(props, usable) {
+  const { placement } = classifyPlacement(props);
   const h = [];
-  if (props.treatAsChar === false) h.push("floating (not treated as a character)");
-  if (props.vertRelTo === "Paper" || props.horzRelTo === "Paper") {
-    h.push("anchored to the PAPER, not the paragraph");
+  if (placement === "overlay") {
+    h.push("overlay — not in the reading flow at all (watermark/stamp)");
+  } else if (placement !== "inline") {
+    h.push(`${placement} — floating, anchored to the ${props.vertRelTo === "Paper" ? "PAPER" : "paragraph"}`);
   }
   if (usable > 0 && props.width > usable) {
-    h.push(`wider than the text area (${props.width} > ${usable} HWPUNIT)`);
+    h.push(`wider than the text column (${props.width} > ${usable} HWPUNIT)`);
   }
   return h;
 }
@@ -296,6 +303,7 @@ if (op === "list") {
       heightMm: Number(hwpUnitToMm(x.props.height).toFixed(1)),
       naturalWidth: x.props.originalWidth,
       naturalHeight: x.props.originalHeight,
+      placement: classifyPlacement(x.props).placement,
       treatAsChar: x.props.treatAsChar,
       vertRelTo: x.props.vertRelTo,
       horzRelTo: x.props.horzRelTo,
@@ -319,7 +327,7 @@ if (op === "list") {
       process.stdout.write(
         `[${r.index}] section ${r.section}, paragraph ${r.paragraph}, control ${r.controlIndex}\n` +
           `      size ${r.width}x${r.height} HWPUNIT (${r.widthMm}x${r.heightMm} mm), ` +
-          `${r.treatAsChar ? "inline (treatAsChar)" : "FLOATING"}\n` +
+          `${r.placement}${r.treatAsChar ? " (treatAsChar)" : ""}\n` +
           (r.description ? `      description: ${r.description}\n` : "") +
           (r.hasCaption ? `      caption: ${JSON.stringify(r.caption)}\n` : "") +
           (r.hazards.length ? `      ⚠ ${r.hazards.join("; ")}\n` : ""),

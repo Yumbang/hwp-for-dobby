@@ -187,7 +187,7 @@ const NOT_WRITABLE = new Set(["EACCES", "EPERM", "EROFS"]);
 //
 // `ownText` may be a Map(id → text), a plain object keyed by id, or a
 // function(node) → text.
-function flattenNodes(nodes, ownTextOf) {
+function flattenNodes(nodes, ownTextOf, objectsOf = () => []) {
   const out = [];
   const walk = (list, parentId) => {
     for (const node of list || []) {
@@ -212,6 +212,15 @@ function flattenNodes(nodes, ownTextOf) {
         parentId,
         digest: digestOf(text),
         chars: text.length,
+        // Image CONTENT, separately from the text. A rendered picture marker
+        // describes the FRAME ("100% of text width · inline"), which is exactly
+        // what an image swap is designed to preserve — so replacing a figure
+        // leaves the section's text byte-identical and a text-only diff reports
+        // "변경 없음" over a document whose figure changed. Digesting the image
+        // bytes here, rather than putting a hash in the marker, keeps the noise
+        // out of what a reader sees: the snapshot needs identity, the reader
+        // needs description.
+        objects: objectsOf(node, id),
         // The old text is stored, not just its digest: it is the only way to
         // show a word-level diff without re-opening (and re-parsing) whatever
         // the document looked like last week — which by then no longer exists.
@@ -242,12 +251,22 @@ function definedOnly(obj) {
 // Build the in-memory baseline. `nodes` is the section tree (array of roots,
 // each with `children`); `meta` is the safety record checkMeta() will compare
 // (see the meta.json schema in this file's checkMeta section).
-export function buildBaseline({ nodes, ownText, meta } = {}) {
+export function buildBaseline({ nodes, ownText, objects, meta } = {}) {
   return {
     version: SNAPSHOT_VERSION,
     meta: definedOnly(meta),
-    nodes: flattenNodes(nodes, ownTextResolver(ownText)),
+    nodes: flattenNodes(nodes, ownTextResolver(ownText), objectsResolver(objects)),
   };
+}
+
+// Same shapes ownText accepts, resolving to an ARRAY of opaque per-object
+// digests for the node. Absent means "not collected", which compares equal to
+// absent — an old baseline without them must not read as "every image changed".
+function objectsResolver(objects) {
+  if (typeof objects === "function") return (node, id) => objects(node, id) ?? [];
+  if (objects instanceof Map) return (node, id) => objects.get(id) ?? [];
+  if (objects && typeof objects === "object") return (_node, id) => objects[id] ?? [];
+  return () => [];
 }
 
 // ── reading / writing baselines ─────────────────────────────────────────────
@@ -929,7 +948,14 @@ export function diffBaselines(oldBaseline, newBaseline, opts = {}) {
       continue;
     }
     const on = O[i];
-    const contentChanged = on.digest !== nn.digest;
+    const textChanged = on.digest !== nn.digest;
+    // An old baseline has no `objects` at all; treat that as "not collected" so
+    // a pre-upgrade snapshot does not report every figure as replaced.
+    const oldObjs = Array.isArray(on.objects) ? on.objects : null;
+    const newObjs = Array.isArray(nn.objects) ? nn.objects : null;
+    const objectsChanged =
+      oldObjs !== null && newObjs !== null && JSON.stringify(oldObjs) !== JSON.stringify(newObjs);
+    const contentChanged = textChanged || objectsChanged;
     const entry = {
       ...side(nn),
       matchedBy: how[j],
@@ -939,7 +965,24 @@ export function diffBaselines(oldBaseline, newBaseline, opts = {}) {
       new: side(nn),
     };
     if (contentChanged) {
-      if (withDiff) entry.diff = wordDiff(on.text ?? "", nn.text ?? "", opts);
+      entry.textChanged = textChanged;
+      entry.objectsChanged = objectsChanged;
+      if (withDiff) {
+        const parts = [];
+        if (textChanged) parts.push(wordDiff(on.text ?? "", nn.text ?? "", opts));
+        if (objectsChanged) {
+          // Say WHICH kind of change it was. "changed" with an empty word diff
+          // reads like a bug in the differ.
+          const before = oldObjs.length;
+          const after = newObjs.length;
+          parts.push(
+            before === after
+              ? `[image content changed: ${countDiff(oldObjs, newObjs)} of ${after}]`
+              : `[images: ${before} → ${after}]`,
+          );
+        }
+        entry.diff = parts.join("\n");
+      }
       changed.push(entry);
     }
     if (movedFlag[j]) moved.push(entry);
@@ -953,6 +996,13 @@ export function diffBaselines(oldBaseline, newBaseline, opts = {}) {
 // Did anything happen? A move with identical text still counts — the document
 // changed even though no word did. Used by the caller to decide between the
 // full report and the single `변경 없음` line.
+// How many positions differ between two equal-length digest lists.
+function countDiff(a, b) {
+  let n = 0;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) n++;
+  return n;
+}
+
 export function hasChanges(diff) {
   if (!diff) return false;
   return Boolean(
