@@ -15,10 +15,10 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { skillName } from "../../scripts/_payload.mjs";
+import { collectPayload, skillName } from "../../scripts/_payload.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, "..", "..");
@@ -126,4 +126,87 @@ test("retains the enhanced-tier degrade disclosure (exit 4 / UNSUPPORTED / degra
     containsAny("exit 4", "UNSUPPORTED", "degrade"),
     "LOST DISCLOSURE: the enhanced-tier degrade path (exit 4 / unsupported / degrade) is gone — agents wouldn't know PNG/PDF/precise-read fall back to core off Claude Code.",
   );
+});
+
+// ── documentation structure (CLAUDE.md "where a sentence belongs") ─────────
+//
+// SKILL.md is loaded on EVERY invocation of the skill, so every byte in it is a
+// tax paid by every task. It is meant to ROUTE — task → script, plus the traps
+// that make the obvious choice wrong — while the flags and output shapes of a
+// chosen command live in reference/, read only when needed.
+//
+// That distinction decayed once already: `## Reading & extraction` reached 8,294
+// bytes, 2.3x the routing table it supported, because each new reading feature
+// appended its whole manual there. These tests are what stops it happening
+// again, since nothing else would notice.
+
+// Budget, not a limit of taste: raise it only with a reason in the commit.
+const SKILL_MD_MAX = 18000;
+
+test("structure: SKILL.md stays inside its size budget", () => {
+  assert.ok(
+    SKILL.length <= SKILL_MD_MAX,
+    `SKILL.md is ${SKILL.length} bytes, over the ${SKILL_MD_MAX} budget by ` +
+      `${SKILL.length - SKILL_MD_MAX}. Move per-command detail into reference/ ` +
+      `rather than raising the budget — it is loaded on every invocation.`,
+  );
+});
+
+test("structure: no single SKILL.md section outgrows the routing table", () => {
+  // The failure shape to catch: one capability's manual quietly becoming the
+  // largest thing in the file.
+  const sections = {};
+  let current = "(preamble)";
+  for (const line of SKILL.split("\n")) {
+    if (line.startsWith("## ")) current = line.slice(3).trim();
+    sections[current] = (sections[current] ?? 0) + line.length + 1;
+  }
+  const router = Object.entries(sections).find(([k]) => /Quick Reference/i.test(k));
+  assert.ok(router, "SKILL.md must keep a Quick Reference routing table");
+  for (const [name, size] of Object.entries(sections)) {
+    if (name === router[0]) continue;
+    assert.ok(
+      size <= router[1],
+      `section "${name}" is ${size} bytes, larger than the ${router[1]}-byte routing ` +
+        `table. That is a manual, not routing — move it to reference/.`,
+    );
+  }
+});
+
+test("structure: every reference/ file is pointed at from SKILL.md", () => {
+  const dir = join(ROOT, "reference");
+  assert.ok(existsSync(dir), "reference/ must exist — it is where command detail lives");
+  const files = readdirSync(dir).filter((f) => f.endsWith(".md"));
+  assert.ok(files.length > 0, "reference/ must not be empty");
+  for (const f of files) {
+    assert.ok(
+      SKILL.includes(`reference/${f}`),
+      `reference/${f} exists but SKILL.md never points at it — the agent will ` +
+        `never read it, so it may as well not ship.`,
+    );
+  }
+});
+
+test("structure: every reference/ pointer in SKILL.md resolves", () => {
+  // A dead pointer is worse than no pointer: the agent cannot tell a missing
+  // file from an unhelpful one.
+  for (const m of SKILL.matchAll(/reference\/([A-Za-z0-9._-]+\.md)/g)) {
+    assert.ok(
+      existsSync(join(ROOT, "reference", m[1])),
+      `SKILL.md points at reference/${m[1]}, which does not exist`,
+    );
+  }
+});
+
+test("structure: reference/ ships in the delivery payload", () => {
+  const shipped = collectPayload(ROOT);
+  const refs = shipped.filter((p) => p.startsWith("reference/"));
+  assert.ok(
+    refs.length > 0,
+    "reference/ is not in the payload — every pointer would be a dead link in " +
+      "an installed copy. Add it to ALLOW_DIRS in scripts/_payload.mjs.",
+  );
+  for (const f of readdirSync(join(ROOT, "reference")).filter((f) => f.endsWith(".md"))) {
+    assert.ok(shipped.includes(`reference/${f}`), `reference/${f} is not shipped`);
+  }
 });

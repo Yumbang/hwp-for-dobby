@@ -39,7 +39,12 @@ export function skillName(root) {
 // Top-level files taken verbatim.
 export const ALLOW_FILES = ["SKILL.md", "README.md", "package.json", "LICENSE.txt"];
 // Directories walked recursively.
-export const ALLOW_DIRS = ["spec", "src", join("vendor", "rhwp")];
+//
+// `reference/` is the skill's PAGED-IN documentation: SKILL.md routes, these
+// files explain. They must ship — a pointer in SKILL.md to a file that is not
+// in the payload is a dead link in every installed copy, and the agent has no
+// way to tell that from "the file said nothing useful".
+export const ALLOW_DIRS = ["spec", "src", "reference", join("vendor", "rhwp")];
 // Subtrees excluded even when they sit under an included directory. vendor/bin
 // holds the optional native CLI (gitignored, machine-specific): it must never
 // travel with the skill — enhanced/ resolves it at runtime instead.
