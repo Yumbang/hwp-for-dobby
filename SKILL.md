@@ -40,6 +40,7 @@ Output is **always HWP 5.0 (`.hwp`)**. Native HWPX save is rejected by Hancom Of
 | Find & replace (safe, saves) | `node src/core/replace.mjs <in> --query <q> --replacement <r> --output <out.hwp>` |
 | Insert/delete body text | `node src/core/edit_text.mjs <in> --op insert\|delete\|insert-paragraph ... --output <out.hwp>` |
 | Edit a table cell | `node src/core/edit_cell.mjs <in> --op set --table N --row R --col C --text "..." --output <out.hwp>` (same `index` as extract_tables; or `--section/--paragraph/--control`) |
+| **Images** (list · insert · replace · caption) | `node src/core/image.mjs <in> --op list\|insert\|replace\|remove [--file img.png] [--index N] [--caption "..."] --output <out.hwp>` |
 | Create/merge/split a table | `node src/core/table.mjs <in> --op create\|merge\|split ... --output <out.hwp>` |
 | Char/paragraph formatting | `node src/core/format.mjs <in> --op char\|para ... --props '<json>' --output <out.hwp>` |
 | Header/footer | `node src/core/header_footer.mjs <in> --op create\|apply ... --output <out.hwp>` |
@@ -96,6 +97,25 @@ Every editing script (`edit_text`, `edit_cell`, `table`, `format`, `header_foote
 - **`fill_form.mjs`** — `--list` shows fields (`occurrence` / `sameNameCount`). `--values` fills them. A name that appears more than once must be written `name[N]` or the fill is refused as ambiguous — never silently fill only the first. `--dry-run` writes nothing. `--rows` + `--out-dir` fills one output per data row. **Empty fields fill cleanly.** Filling a **pre-populated** field warns about upstream bug #838 (char-shape not shifted → Hancom may reject) — visually verify those with `render.mjs`.
 - **`edit_cell.mjs`** — `--table N` uses the same index as `extract_tables` (top-level tables). Or `--section/--paragraph/--control`. Address a cell by linear `--cell` index or by `--row/--col`. Out-of-range cell index is caught and reported (the raw engine call would throw). Covered (merged-away) positions are NOT_FOUND with a pointer at the origin.
 - **`create.mjs`** — replays a JSON plan (`insert_text`, `insert_paragraph`, `create_table`, `insert_text_in_cell`) against a fresh blank document.
+
+### Images — `image.mjs`
+
+Detail and traps: **`reference/images.md`**.
+
+**The engine's defaults are the layout bug.** A plainly inserted picture is
+FLOATING and anchored to the paper corner (`treatAsChar:false`,
+`vertRelTo/horzRelTo:"Paper"`, offsets 0), so several of them stack in the same
+spot and shove the body text around — this is what "the agent put an image in
+and the document fell apart" actually is. `image.mjs --op insert` makes images
+**inline (`treatAsChar`) by default**; `--float` opts back in, loudly.
+
+Sizes are **HWPUNIT (1/7200 inch), never pixels** — passing a 1600px width gives
+a 5.6 mm stamp, and "converting" it at 96 dpi gives 2.8× the page. Omit
+`--width` and it is fitted to the text area; give one that cannot fit and it is
+**refused (exit 2), not clamped**.
+
+Start with `--op list`: it reports which existing images are floating,
+paper-anchored or wider than the text area, and never changes them.
 
 ## Verify outputs after every run
 
