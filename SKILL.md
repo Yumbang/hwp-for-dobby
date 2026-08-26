@@ -77,6 +77,7 @@ Pick the script here; the flags and traps live in **`reference/reading.md`** and
 |---|---|---|
 | What is this file? | `info.mjs` | Run it first on anything unfamiliar. |
 | Body text | `read.mjs` | Strict by default — **never flattens tables**. Memos appended automatically; a body read also snapshots the section tree and reports what changed since your last read. |
+| Images in the text | `read.mjs` (automatic) | Pictures render as `[image … · inline\|block\|beside]`, sized **relative to the text column**. Overlays (watermarks) are listed after the body, never placed in it. Details: `image.mjs --op list`. |
 | Tracked changes | `read.mjs --track-changes` | A plain read of a tracked document mixes DELETED text into the body. Heed the stderr warning. HWPX = `NOT CHECKED`, not `none`. |
 | Table DATA | `extract_tables.mjs` | The ONLY safe path — address-aware. `--summary` before dumping grids. |
 | Find text + addresses | `search.mjs` | 0 matches is exit 0, not an error. |

@@ -53,6 +53,48 @@ the document's final text.
 
 **HWPX cannot be scanned**: the answer is `NOT CHECKED`, which is not `none`.
 
+## Images in body text
+
+A picture used to be invisible here: it was classified with the SectionDef /
+ColumnDef controls and dropped, so a document could say "아래 그림은…" and the
+extracted text below it was a blank line. 20% of 40 real documents carry images.
+
+They now render as a marker where they sit:
+
+```
+[image "그림3.png" · 100% of text width · inline]
+[image 23% of text width · beside]
+```
+
+**The size is relative to the text column, not absolute.** "150mm" cannot be
+judged without knowing the page is 210mm wide; "100% of text width" answers
+"full-width figure or icon?" at once. The denominator comes from `getPageDef`
+per SECTION, because documents do mix a landscape section in.
+
+**The placement word is load-bearing.** `inline` flows with the text;
+`block` sits between paragraphs; `beside` means the body text wraps AROUND it,
+so the paragraphs either side may read oddly — which otherwise looks like an
+extraction bug.
+
+**The filename is there when Hancom recorded one** — on 40 of 41 pictures
+across 40 real documents, though the names are auto-numbered (`그림3.png`), so
+it says WHICH picture rather than what it shows. Captions, by contrast, were on
+0 of 41: real documents caption figures with an ordinary body paragraph.
+
+**Overlays are listed separately, never placed in the body:**
+
+```
+─── overlay images (3) ───
+[image "그림6.png" · 18% of text width · overlay]
+```
+
+A watermark or stamp anchored in front of or behind the text has no reading
+position, and inventing one would be the same error as fabricating a heading
+tree for a document that has none.
+
+For anything beyond seeing that they exist — sizes, anchoring, replacing —
+use `image.mjs --op list` (reference/images.md).
+
 ## `extract_tables.mjs` — the ONLY safe way to read table data
 
 Rebuilds the grid by cell `{row, col, rowSpan, colSpan}` so a merged cell never
