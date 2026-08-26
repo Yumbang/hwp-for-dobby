@@ -472,7 +472,20 @@ test("detectTrackChanges: corroboration WITHOUT the flag bit is also not a verdi
   });
   const info = detectTrackChanges(path);
   assert.equal(info.flagBit, false);
-  assert.equal(info.corroborated, true, "authors + change records + a range tag are all present");
+  // The verdict is `flagBit && corroborated`, so a clear flag settles it and
+  // the corroboration scan is SKIPPED — it is the expensive half (inflating
+  // every BodyText section), and only 3 of 40 real documents have the flag.
+  // Skipping must not be reported as "checked and found nothing": this
+  // document really does carry authors, change records and a range tag.
+  assert.equal(info.corroborationScanned, false, "the scan is skipped when the flag is clear");
+  assert.equal(info.corroborated, false, "…and unscanned is reported false, not true");
+  
+  // Force it and the records really are there — the skip is an optimization,
+  // not a blindness.
+  const scanned = detectTrackChanges(path, { forceScan: true });
+  assert.equal(scanned.corroborationScanned, true);
+  assert.equal(scanned.corroborated, true, "authors + change records + a range tag are all present");
+  assert.equal(scanned.hasTrackChanges, false, "and the verdict is STILL false without bit 14");
   assert.equal(info.hasTrackChanges, false, "without bit 14 the verdict must stay false");
 });
 
@@ -495,6 +508,7 @@ test("detectTrackChanges: exact key set — every one of these is read by the gu
   assert.deepEqual(Object.keys(detectTrackChanges(TRACKED)).sort(), [
     "authors",
     "corroborated",
+      "corroborationScanned",
     "counts",
     "flagBit",
     "format",

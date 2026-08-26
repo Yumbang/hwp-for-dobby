@@ -14,6 +14,7 @@
 //                  raw-deflate when FileHeader flag bit 0 is set.
 //   HWPX (.hwpx) = ZIP of OWPML XML parts.
 
+import { readFileSync } from "node:fs";
 import { inflateRawSync } from "node:zlib";
 
 // ── signatures ─────────────────────────────────────────────────────────────
@@ -321,3 +322,44 @@ export function* readZipEntries(buf, want) {
 
 // The OWPML parts that carry body content.
 export const HWPX_CONTENT_PART = /^Contents\/(section\d+|header)\.xml$/i;
+
+// ── one read per file, per process ────────────────────────────────────────
+//
+// Two things the engine does not model — memos and tracked changes — are both
+// detected by scanning this container, and they were each doing the whole job
+// independently: read the file, parse the CFB, inflate every BodyText section,
+// walk the records. On a 199 MB document that measured 154 ms + 113 ms, most of
+// it duplicated, on EVERY command (a plain read surfaces memos and warns about
+// tracked changes; every write script runs both guards).
+//
+// So the expensive part is done once and shared. The cache is per PROCESS and
+// keyed by path: a CLI run opens its input once and does not change it
+// underneath itself. It is deliberately not a cross-process cache — that would
+// need invalidation, and lib/cache.mjs already exists for the case where that
+// is worth it.
+const CONTAINER_CACHE = new Map();
+
+export function openContainer(path, { fresh = false } = {}) {
+  if (!fresh && CONTAINER_CACHE.has(path)) return CONTAINER_CACHE.get(path);
+  const buf = readFileSync(path);
+  const format = containerFormat(buf);
+  const streams = format === "hwp" ? readCfbStreamsByName(buf) : null;
+  const entry = {
+    path,
+    buf,
+    format,
+    streams,
+    compressed: streams ? isCompressed(streams) : true,
+    // Inflating is the costly half, so it happens once and lazily.
+    get sections() {
+      if (!this._sections) this._sections = streams ? [...sectionStreams(streams)] : [];
+      return this._sections;
+    },
+  };
+  CONTAINER_CACHE.set(path, entry);
+  return entry;
+}
+
+export function clearContainerCache() {
+  CONTAINER_CACHE.clear();
+}

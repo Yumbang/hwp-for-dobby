@@ -56,6 +56,7 @@ import { readFileSync } from "node:fs";
 import { EXIT, fail } from "./exit-codes.mjs";
 import {
   INLINE8,
+  openContainer,
   TAG,
   containerFormat,
   countRecords,
@@ -257,18 +258,43 @@ function readAuthors(docInfo) {
 //
 // supported:false (HWPX, HWP3, anything unrecognized) means WE DID NOT LOOK.
 // Treating it as "clean" is the bug this field exists to prevent.
-export function detectTrackChanges(path) {
-  const buf = readFileSync(path);
-  const fmt = containerFormat(buf);
-  if (fmt !== "hwp") return unsupported(fmt);
+export function detectTrackChanges(path, { forceScan = false } = {}) {
+  const container = openContainer(path);
+  if (container.format !== "hwp") return unsupported(container.format);
 
-  const streams = readCfbStreamsByName(buf);
+  const streams = container.streams;
   if (!streams) return unsupported("hwp");
 
   const flags = fileHeaderFlags(streams);
   const flagBit = flags != null && ((flags >>> TRACK_CHANGE_FLAG_BIT) & 1) === 1;
 
-  const compressed = isCompressed(streams);
+  // SHORT-CIRCUIT. The verdict is `flagBit && corroborated`, so when the flag
+  // is clear the corroboration scan cannot change the answer — and that scan is
+  // the expensive half: inflating every BodyText section and walking its
+  // records (113 ms on a 199 MB document). Measured over 40 real files, only 3
+  // have the flag set, so 37 of them were paying for a walk whose result was
+  // already decided.
+  //
+  // `corroborationScanned` keeps this honest. The module's whole contract is
+  // that a caller can tell "none" from "could not look" (read.mjs relies on it),
+  // so `corroborated: false` must not be read as "checked and found nothing"
+  // when nothing was checked. The VERDICT is still certain: no flag means no
+  // tracked changes, definitively.
+  if (!flagBit && !forceScan) {
+    return {
+      format: "hwp",
+      supported: true,
+      hasTrackChanges: false,
+      flagBit: false,
+      corroborated: false,
+      corroborationScanned: false,
+      counts: emptyCounts(),
+      authors: [],
+      sections: {},
+    };
+  }
+
+  const compressed = container.compressed;
   const docInfoRaw = streams.get("DocInfo");
   const docInfo = docInfoRaw ? inflateStream(docInfoRaw, compressed) : null;
   // Tag 96 = the author list, tag 97 = the change records themselves. Tag 32
@@ -280,7 +306,7 @@ export function detectTrackChanges(path) {
   const counts = emptyCounts();
   const sections = {};
   let rangeTagRecords = 0;
-  for (const [name, data] of sectionStreams(streams)) {
+  for (const [name, data] of container.sections) {
     const s = scanRecordStream(data, name);
     rangeTagRecords += s.rangeTagRecords;
     addCounts(counts, s.counts);
@@ -296,6 +322,7 @@ export function detectTrackChanges(path) {
     hasTrackChanges: Boolean(flagBit && corroborated),
     flagBit,
     corroborated,
+    corroborationScanned: true,
     counts,
     authors,
     sections,

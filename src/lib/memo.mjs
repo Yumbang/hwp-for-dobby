@@ -27,6 +27,7 @@ import {
   INLINE8,
   TAG,
   containerFormat,
+  openContainer,
   decodeParaText,
   indexOfUtf16,
   isCfb,
@@ -43,13 +44,12 @@ const HWPTAG_CTRL_HEADER = TAG.CTRL_HEADER; // 71
 
 // ── HWP5 / CFB ───────────────────────────────────────────────────────────────
 
-function detectHwpMemos(buf) {
-  const streams = readCfbStreamsByName(buf);
-  if (!streams) return null;
+function detectHwpMemos(container) {
+  if (!container.streams) return null;
 
   const perSection = {};
   let total = 0;
-  for (const [name, data] of sectionStreams(streams)) {
+  for (const [name, data] of container.sections) {
     let c = 0;
     for (const r of walkRecords(data)) if (r.tag === HWPTAG_MEMO_LIST) c++;
     if (c > 0) perSection[name] = c;
@@ -81,12 +81,13 @@ function detectHwpxMemos(buf) {
 // or { format: 'unknown', hasMemos: false, count: 0 } for formats we can't scan
 // (e.g. HWP3) — callers must treat 'unknown' as "could not rule memos out".
 export function detectMemos(path) {
-  const buf = readFileSync(path);
-  const fmt = containerFormat(buf);
-  if (fmt === "hwp") {
-    return detectHwpMemos(buf) ?? { format: "unknown", hasMemos: false, count: 0 };
+  // openContainer reads + parses + inflates ONCE per process; trackchange.mjs
+  // shares the same entry, so the two scans no longer duplicate that work.
+  const container = openContainer(path);
+  if (container.format === "hwp") {
+    return detectHwpMemos(container) ?? { format: "unknown", hasMemos: false, count: 0 };
   }
-  if (fmt === "hwpx") return detectHwpxMemos(buf);
+  if (container.format === "hwpx") return detectHwpxMemos(container.buf);
   return { format: "unknown", hasMemos: false, count: 0 };
 }
 
@@ -99,12 +100,12 @@ export function detectMemos(path) {
 // span between a "%%me" field-begin/end pair in the body, whose CTRL_HEADER
 // carries the same id. HWPX: <hp:t> runs inside each <…:memo> element.
 export function readMemos(path) {
-  const buf = readFileSync(path);
+  const container = openContainer(path);
+  const buf = container.buf;
   const out = [];
   if (isCfb(buf)) {
-    const streams = readCfbStreamsByName(buf);
-    if (!streams) return out;
-    for (const [name, data] of sectionStreams(streams)) {
+    if (!container.streams) return out;
+    for (const [name, data] of container.sections) {
       const recs = [...walkRecords(data)];
       const firstMemo = recs.findIndex((r) => r.tag === HWPTAG_MEMO_LIST);
       if (firstMemo < 0) continue;
