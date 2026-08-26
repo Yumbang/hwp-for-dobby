@@ -429,3 +429,53 @@ test("cache: editing the document is picked up immediately", async () => {
     assert.equal(b.stdout.includes("처음 제목"), false);
   });
 });
+
+test("diff: replacing an image is a change, even though the text is identical", async () => {
+  // --op replace preserves size and anchoring on purpose, so the rendered
+  // picture marker ("100% of text width · inline") is byte-identical before and
+  // after: a text-only diff reported 변경 없음 over a document whose figure had
+  // been swapped. The snapshot digests the image BYTES separately — the marker
+  // stays clean for the reader, the baseline gets identity.
+  await tmp(async (dir) => {
+    const { emptyDocument } = await import("../../src/lib/_bootstrap.mjs");
+    const { deflateSync } = await import("node:zlib");
+    const png = (w, h, rgb) => {
+      const t = [];
+      for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; }
+      const crc = (b) => { let c = 0xffffffff; for (const x of b) c = t[(c ^ x) & 0xff] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
+      const ch = (ty, d) => { const L = Buffer.alloc(4); L.writeUInt32BE(d.length); const td = Buffer.concat([Buffer.from(ty, "ascii"), d]); const C = Buffer.alloc(4); C.writeUInt32BE(crc(td)); return Buffer.concat([L, td, C]); };
+      const ih = Buffer.alloc(13); ih.writeUInt32BE(w, 0); ih.writeUInt32BE(h, 4); ih[8] = 8; ih[9] = 2;
+      const raw = Buffer.alloc(h * (1 + w * 3));
+      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const o = y * (1 + w * 3) + 1 + x * 3; raw[o] = rgb[0]; raw[o + 1] = rgb[1]; raw[o + 2] = rgb[2]; }
+      return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), ch("IHDR", ih), ch("IDAT", deflateSync(raw)), ch("IEND", Buffer.alloc(0))]);
+    };
+    const a = join(dir, "a.png"); const b = join(dir, "b.png");
+    writeFileSync(a, png(400, 300, [220, 40, 40]));
+    writeFileSync(b, png(400, 300, [40, 40, 220]));   // same size, different pixels
+
+    const base = join(dir, "base.hwp");
+    const doc = await emptyDocument();
+    for (const [i, line] of ["1. 첫째 절", "첫째 본문.", "2. 둘째 절", "둘째 본문."].entries()) {
+      if (i > 0) doc.insertParagraph(0, i);
+      doc.insertText(0, i, 0, line);
+    }
+    writeFileSync(base, Buffer.from(doc.exportHwp()));
+
+    const path = join(dir, "doc.hwp");
+    const snap = join(dir, "snap");
+    const img = (args) => spawnSync(process.execPath, ["src/core/image.mjs", ...args], { cwd: ROOT, encoding: "utf8" });
+    assert.equal(img([base, "--op", "insert", "--file", a, "--section", "0", "--paragraph", "3", "--output", path]).status, 0);
+    assert.equal(run([path, "--op", "snapshot", "--snapshot-dir", snap, "--no-cache"]).status, 0);
+
+    const swapped = join(dir, "swapped.hwp");
+    assert.equal(img([path, "--op", "replace", "--index", "0", "--file", b, "--output", swapped]).status, 0);
+    writeFileSync(path, readFileSync(swapped));
+
+    const d = run([path, "--op", "diff", "--snapshot-dir", snap, "--no-cache"]);
+    assert.equal(d.status, 0, d.stderr);
+    assert.equal(d.stdout.includes("변경 없음"), false, "an image swap must not report 변경 없음");
+    assert.match(d.stdout, /image content changed/, "and it must say WHY, not just 'changed'");
+    assert.match(d.stdout, /^M 2\s/m, "only the section holding the image");
+    assert.equal(/^M 1\s/m.test(d.stdout), false, "the untouched section stays untouched");
+  });
+});

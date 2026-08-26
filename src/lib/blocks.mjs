@@ -65,6 +65,7 @@ import {
   paragraphText,
 } from "./doc_walk.mjs";
 import { extractTables } from "./tables.mjs";
+import { classifyPlacement, pictureMarker } from "./objects.mjs";
 import { renderTableMarkdown } from "./render_md.mjs";
 import { equationToLatex, normalizeEquationScript } from "./eqn.mjs";
 
@@ -73,6 +74,7 @@ import { equationToLatex, normalizeEquationScript } from "./eqn.mjs";
 export { BODY_EQUATION_CELL };
 
 const DEFAULTS = Object.freeze({
+  images: true, //   pictures rendered as a relative-size marker
   tableMode: "body", // "body" → a real markdown grid | "cells" → a placeholder
   maxDepth: 1, // 1 = no nested-table discovery; see the budget note above
   equations: true,
@@ -227,7 +229,7 @@ function tablePlaceholder(block, control) {
 // silently receiving a model built to someone else's settings.
 const MODEL_CACHE = new WeakMap();
 
-const optionsKey = (o) => `${o.tableMode}|${o.maxDepth}|${o.equations}|${o.footnotes}`;
+const optionsKey = (o) => `${o.tableMode}|${o.maxDepth}|${o.equations}|${o.footnotes}|${o.images}`;
 
 // Build (or return the cached) block stream for `doc`.
 //
@@ -373,6 +375,16 @@ function build(doc, o) {
 
     const lines = [];
     const notes = [];
+    const overlayNotes = [];
+    // getPageDef is a property read (0.004 ms), not pagination — cheap enough
+    // to make every picture marker relative to the actual text column.
+    let usable = 0;
+    try {
+      const pd = JSON.parse(doc.getPageDef(blocks[from]?.s ?? 0));
+      usable = Math.max(0, (pd.width ?? 0) - (pd.marginLeft ?? 0) - (pd.marginRight ?? 0));
+    } catch {
+      usable = 0;
+    }
 
     for (let i = from; i <= to; i++) {
       const block = blocks[i];
@@ -387,6 +399,9 @@ function build(doc, o) {
           // would put a phantom marker at position 0 of every section. They
           // produce NOTHING, silently and on purpose.
           if (c.kind === "other") continue;
+          // Pictures were part of that same silent drop until now: a document
+          // could carry a dozen and the rendered text showed nothing at all.
+          if (c.kind === "picture" && !ro.images) continue;
           if (c.kind === "table" && !ro.tables) continue;
           if (c.kind === "equation" && !ro.equations) continue;
           if (c.kind === "footnote" && !ro.footnotes) continue;
@@ -400,7 +415,17 @@ function build(doc, o) {
 
       for (const c of parts) {
         let piece;
-        if (c.kind === "equation") {
+        if (c.kind === "picture") {
+          const place = classifyPlacement(c.props ?? {});
+          if (place.placement === "overlay") {
+            // A watermark or stamp has no reading position. Placing it in the
+            // body would invent one; it is collected and reported after the
+            // span instead, the way footnote bodies are.
+            overlayNotes.push(pictureMarker(c.props ?? {}, { usableWidth: usable, placement: "overlay" }));
+            continue;
+          }
+          piece = pictureMarker(c.props ?? {}, { usableWidth: usable, placement: place.placement });
+        } else if (c.kind === "equation") {
           piece = renderEquation(c, ro);
         } else if (c.kind === "footnote") {
           piece = footnoteMarker(c);
@@ -430,6 +455,9 @@ function build(doc, o) {
     let text = lines.join(ro.blockSeparator);
     if (ro.footnoteBodies && notes.length) {
       text += `\n\n${notes.map((n) => `[^${n.number}]: ${n.text}`).join("\n")}`;
+    }
+    if (overlayNotes.length) {
+      text += `\n\n${overlayNotes.join("\n")}`;
     }
     return text;
   }

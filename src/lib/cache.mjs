@@ -49,7 +49,11 @@ export const CACHE_ROOT = join(tmpdir(), "hwp-skill-cache");
 // the code did.
 // 2: the model carries structureAgreement + sourceFormat.
 export const DETECTOR_VERSION = 2;
-export const RENDER_VERSION = 1;
+// 2: rendered body text now contains picture markers. Any baseline or cached
+// model from before this carries text without them, so comparing across the
+// bump reports every node as changed — which is exactly what the snapshot meta
+// gate warns about, and why this number exists.
+export const RENDER_VERSION = 2;
 export const EQN_VERSION = 1;
 export const TABLE_RENDER_VERSION = 1;
 

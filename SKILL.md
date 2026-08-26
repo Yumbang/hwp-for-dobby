@@ -40,6 +40,7 @@ Output is **always HWP 5.0 (`.hwp`)**. Native HWPX save is rejected by Hancom Of
 | Find & replace (safe, saves) | `node src/core/replace.mjs <in> --query <q> --replacement <r> --output <out.hwp>` |
 | Insert/delete body text | `node src/core/edit_text.mjs <in> --op insert\|delete\|insert-paragraph ... --output <out.hwp>` |
 | Edit a table cell | `node src/core/edit_cell.mjs <in> --op set --table N --row R --col C --text "..." --output <out.hwp>` (same `index` as extract_tables; or `--section/--paragraph/--control`) |
+| **Images** (list · insert · replace · caption) | `node src/core/image.mjs <in> --op list\|insert\|replace\|remove [--file img.png] [--index N] [--caption "..."] --output <out.hwp>` |
 | Create/merge/split a table | `node src/core/table.mjs <in> --op create\|merge\|split ... --output <out.hwp>` |
 | Char/paragraph formatting | `node src/core/format.mjs <in> --op char\|para ... --props '<json>' --output <out.hwp>` |
 | Header/footer | `node src/core/header_footer.mjs <in> --op create\|apply ... --output <out.hwp>` |
@@ -76,6 +77,7 @@ Pick the script here; the flags and traps live in **`reference/reading.md`** and
 |---|---|---|
 | What is this file? | `info.mjs` | Run it first on anything unfamiliar. |
 | Body text | `read.mjs` | Strict by default — **never flattens tables**. Memos appended automatically; a body read also snapshots the section tree and reports what changed since your last read. |
+| Images in the text | `read.mjs` (automatic) | Pictures render as `[image … · inline\|block\|beside]`, sized **relative to the text column**. Overlays (watermarks) are listed after the body, never placed in it. Details: `image.mjs --op list`. |
 | Tracked changes | `read.mjs --track-changes` | A plain read of a tracked document mixes DELETED text into the body. Heed the stderr warning. HWPX = `NOT CHECKED`, not `none`. |
 | Table DATA | `extract_tables.mjs` | The ONLY safe path — address-aware. `--summary` before dumping grids. |
 | Find text + addresses | `search.mjs` | 0 matches is exit 0, not an error. |
@@ -89,13 +91,18 @@ record, silently.
 
 ## Editing — the safe path
 
-**Find/replace (`replace.mjs`) is the keystone.** It replaces across body text, table cells and textboxes in one pass, then reloads the saved file and confirms — `verified: true` means the change is really on disk, and that check, not the replace itself, is the guarantee. (Historical note for anyone reading older docs: up to engine 0.7.15 bulk replace was silently dropped on a genuine `.hwp` because the serializer's round-trip byte cache wasn't invalidated, and the skill routed around it with a search + delete/insert walk. Fixed upstream in 0.7.16; the workaround is gone.)
+Detail: **`reference/editing.md`**. Images: **`reference/images.md`**.
 
-Every editing script (`edit_text`, `edit_cell`, `table`, `format`, `header_footer`, `footnote`, `fill_form`, `unlock`, `create`) follows the same contract: edit → atomic `.hwp` save → reload → verify → report `verified`. A `verified: false` result is a **failed task** (exit 5), never reported as success.
+**Nothing is done until it survives save→reload.** Every write script exports,
+writes, reloads and re-checks; `verified: true` is the guarantee, not the exit
+code. A `verified: false` is a CORRUPTION failure (exit 5), never a success.
 
-- **`fill_form.mjs`** — `--list` shows fields (`occurrence` / `sameNameCount`). `--values` fills them. A name that appears more than once must be written `name[N]` or the fill is refused as ambiguous — never silently fill only the first. `--dry-run` writes nothing. `--rows` + `--out-dir` fills one output per data row. **Empty fields fill cleanly.** Filling a **pre-populated** field warns about upstream bug #838 (char-shape not shifted → Hancom may reject) — visually verify those with `render.mjs`.
-- **`edit_cell.mjs`** — `--table N` uses the same index as `extract_tables` (top-level tables). Or `--section/--paragraph/--control`. Address a cell by linear `--cell` index or by `--row/--col`. Out-of-range cell index is caught and reported (the raw engine call would throw). Covered (merged-away) positions are NOT_FOUND with a pointer at the origin.
-- **`create.mjs`** — replays a JSON plan (`insert_text`, `insert_paragraph`, `create_table`, `insert_text_in_cell`) against a fresh blank document.
+**Two refusals you will meet** (exit 6, each with its own override): a document
+carrying **memos** (`--allow-memo-loss`) or **tracked changes**
+(`--allow-trackchange-loss`). The engine models neither, so saving would delete
+them silently. Read them first — `read.mjs --memos`, `--track-changes`.
+
+**Output is always `.hwp`.** `.hwpx` input is fine; `.hwpx` output is refused.
 
 ## Verify outputs after every run
 

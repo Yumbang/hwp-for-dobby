@@ -100,6 +100,7 @@ import { loadDocument } from "../lib/_bootstrap.mjs";
 import { flag, inputPath, intArg, strArg } from "../lib/argv.mjs";
 import { EXIT, fail } from "../lib/exit-codes.mjs";
 import { renderTableMarkdown } from "../lib/render_md.mjs";
+import { classifyPlacement } from "../lib/objects.mjs";
 import { extractTables } from "../lib/tables.mjs";
 
 const USAGE =
@@ -234,6 +235,27 @@ const tables = extractTables(doc, {
   // --drop-empty normalizes placeholder/whitespace cell text to "".
   mapText: dropEmpty ? normalizePlaceholder : undefined,
 });
+
+// Annotate PLACEMENT — whether the table sits in the text flow or floats
+// beside/around it. 111 of 424 tables in a 40-document survey are floating, and
+// nothing in this output said so: an agent editing a table could not tell a
+// block from one the body text wraps around. Pure annotation; the grid is
+// untouched. (lib/objects.mjs owns the ladder.)
+for (const t of tables) {
+  if (t.controlIndex === undefined) continue; // nested: inherits its parent
+  try {
+    const pr = JSON.parse(doc.getTableProperties(t.section, t.paragraph, t.controlIndex));
+    const { placement } = classifyPlacement({
+      treatAsChar: pr.treatAsChar, textWrap: pr.textWrap,
+      vertRelTo: pr.vertRelTo, horzRelTo: pr.horzRelTo,
+    });
+    t.placement = placement;
+    t.treatAsChar = pr.treatAsChar;
+    t.textWrap = pr.textWrap;
+  } catch {
+    /* a table whose properties will not read keeps the fields absent */
+  }
+}
 
 // Annotate form type (spec rule 5) — pure annotation, grid unchanged.
 if (detectFormType) {
