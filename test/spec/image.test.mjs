@@ -263,3 +263,48 @@ test("usage: missing arguments fail loudly", () => {
   assert.equal(run([FIXTURE, "--op", "remove"]).status, 2); // no --index
   assert.equal(run([FIXTURE, "--op", "list", "--format", "xml"]).status, 2);
 });
+
+test("insert: --offset is refused, because the engine ignores char_offset", async () => {
+  // Measured: offsets 0, 5 and 9 into a 16-character paragraph all land at 16.
+  // Accepting the flag and appending anyway would be a silent lie.
+  await withTmp(async ({ img, out }) => {
+    const r = run(["samples/fixture-clause.hwp", "--op", "insert", "--file", img,
+      "--section", "0", "--paragraph", "3", "--offset", "2", "--output", out]);
+    assert.equal(r.status, 2, `expected USAGE(2), got ${r.status}`);
+    assert.match(r.stderr, /ignores char_offset/);
+    assert.match(r.stderr, /insert-paragraph/, "it must say how to control placement instead");
+  });
+});
+
+test("insert: the picture lands at the END of the target paragraph", async () => {
+  // The honest statement of the engine's behaviour, pinned so a future version
+  // that starts honouring char_offset is noticed rather than assumed.
+  await withTmp(async ({ img, out }) => {
+    const r = run(["samples/fixture-clause.hwp", "--op", "insert", "--file", img,
+      "--section", "0", "--paragraph", "3", "--output", out]);
+    assert.equal(r.status, 0, r.stderr);
+    const { images } = listOf(out);
+    assert.equal(images.length, 1);
+    const body = spawnSync(process.execPath, ["src/core/read.mjs", "samples/fixture-clause.hwp", "--no-snapshot"],
+      { cwd: ROOT, encoding: "utf8" }).stdout.split("\n")[3] ?? "";
+    assert.equal(
+      images[0].charOffset, body.length,
+      `the control should sit at the paragraph end (${body.length}), not ${images[0].charOffset}`,
+    );
+  });
+});
+
+test("caption: the engine's trailing space is not treated as a mismatch", async () => {
+  // Saving appends one U+0020 to caption text. A verifier comparing raw
+  // strings would report a failure that is not one.
+  await withTmp(async ({ img, out }) => {
+    const text = "그림 9. 공백 확인";
+    const r = run(["samples/fixture-clause.hwp", "--op", "insert", "--file", img,
+      "--section", "0", "--paragraph", "3", "--caption", text, "--output", out]);
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.stderr.includes("caption on disk is"), false, "no spurious mismatch warning");
+    const saved = listOf(out).images[0].caption;
+    assert.notEqual(saved, text, "the engine really does append a space");
+    assert.equal(saved.trimEnd(), text, "…and trimEnd makes them equal");
+  });
+});

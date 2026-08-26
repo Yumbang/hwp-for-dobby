@@ -50,7 +50,7 @@ import { exportVerify } from "../lib/verify.mjs";
 
 const USAGE =
   "usage: image.mjs <input> --op list [--format json|text]\n" +
-  "       image.mjs <input> --op insert --file <img> --section N --paragraph N [--offset N]\n" +
+  "       image.mjs <input> --op insert --file <img> --section N --paragraph N\n" +
   "                 [--width HWPUNIT] [--caption \"...\"] [--float] --output <out.hwp>\n" +
   "       image.mjs <input> --op replace --index N --file <img> [--caption \"...\"] --output <out.hwp>\n" +
   "       image.mjs <input> --op remove --index N --output <out.hwp>";
@@ -66,7 +66,22 @@ const caption = strArg("--caption", null);
 const asFloat = flag("--float");
 const section = intArg("--section", null);
 const paragraph = intArg("--paragraph", null);
-const offset = intArg("--offset", 0);
+// --offset is deliberately NOT an option. The engine IGNORES char_offset for a
+// body-inline insert: requesting 0, 5 or 9 into a 16-character paragraph all
+// put the picture at 16, the end, and the returned logicalOffset (17) does not
+// even match where the control lands (16). Accepting the flag and quietly
+// appending anyway would be exactly the kind of silent lie this skill refuses,
+// so a caller who passes it is told instead. Placement is per PARAGRAPH; make a
+// slot with edit_text.mjs --op insert-paragraph. (spec rule 55)
+if (flag("--offset")) {
+  fail(
+    EXIT.USAGE,
+    "error: --offset is not supported: the engine ignores char_offset for a body\n" +
+      "       image and always appends it to the end of the target paragraph.\n" +
+      "       Choose the PARAGRAPH instead — insert an empty one where you want the\n" +
+      "       image with:  node src/core/edit_text.mjs <in> --op insert-paragraph …",
+  );
+}
 const width = intArg("--width", null);
 const index = intArg("--index", null);
 
@@ -328,6 +343,12 @@ const summary = { ok: true, op, input };
 
 if (op === "insert") {
   const img = loadImageOrExit(file);
+  let paragraphEnd = 0;
+  try {
+    paragraphEnd = doc.getParagraphLength(section, paragraph);
+  } catch {
+    paragraphEnd = 0; // out-of-range indices are caught by the insert below
+  }
   const usable = pageUsable(doc, section);
   const fit = fitToWidth({
     naturalWidthPx: img.size.width,
@@ -349,8 +370,11 @@ if (op === "insert") {
   try {
     // cell_path_json "" = insert into the BODY at (section, paragraph, offset).
     placed = JSON.parse(
+      // Ask for the end explicitly rather than passing a position the engine
+      // would silently move: char_offset is ignored and the picture is
+      // appended regardless.
       doc.insertPicture(
-        section, paragraph, offset, "",
+        section, paragraph, paragraphEnd, "",
         img.bytes, fit.width, fit.height,
         img.size.width, img.size.height,
         img.ext, strArg("--description", "") ?? "",

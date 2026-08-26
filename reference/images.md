@@ -68,6 +68,22 @@ crop before the swap and writes it back after. If you ever call the engine
 directly, do the same or "replace the picture, keep the formatting" silently
 loses it.
 
+## Placement is per PARAGRAPH — `char_offset` is ignored
+
+`insertPicture`'s `char_offset` does nothing for a body image. Measured on a
+16-character paragraph: offsets 0, 5 and 9 ALL put the picture at 16, the end.
+The returned `logicalOffset` (17) does not even match where the control lands
+(`getControlTextPositions` reports 16).
+
+So an image cannot be placed mid-paragraph. `image.mjs` has no `--offset` and
+refuses one if given, rather than accepting a number it would silently ignore.
+To control where an image goes, make a paragraph for it:
+
+```bash
+node src/core/edit_text.mjs <in> --op insert-paragraph --section 0 --paragraph 4 --output tmp.hwp
+node src/core/image.mjs tmp.hwp --op insert --file pic.png --section 0 --paragraph 4 --output out.hwp
+```
+
 ## Captions are addressed like a table cell
 
 `setPictureProperties({hasCaption: true})` returns `{"ok":true,"captionCharOffset":N}`.
@@ -82,6 +98,11 @@ const path = JSON.stringify([{ controlIndex: c, cellIndex: 0, cellParaIndex: 0 }
 doc.getTextInCellByPath(s, p, path, 0, len);
 doc.insertTextInCellByPath(s, p, path, 0, "그림 1. 연도별 매출");
 ```
+
+**The engine appends one U+0020 to caption text on save.** A 15-character caption
+reads back as 16 after reload. It is added once and does not compound over
+repeated round-trips (checked to three). Compare captions with `trimEnd()`, or a
+verification step will report a mismatch that is not one.
 
 Enabling a caption **auto-creates the default text `"그림  "`**, so clear it
 before writing or the result reads `"그림  그림 1. …"`. `--caption` does this
