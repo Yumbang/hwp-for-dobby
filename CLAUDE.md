@@ -10,6 +10,50 @@ Notes for editing this skill. It wraps the rhwp engine (Rust→WASM, vendored, M
 - `spec/rhwp-behavior.md` — what the engine actually does on the pinned version. Source of truth.
 - `test/` — `npm test`; keep it green.
 
+## Documentation structure — where a sentence belongs
+
+Four documents, four audiences. Putting a sentence in the wrong one is how this
+repo already hurt itself once, so the rule is explicit:
+
+| File | Audience | Loaded | Carries |
+|---|---|---|---|
+| `SKILL.md` | the agent using the skill | **every invocation** | ROUTING: task → script, and the rules that bite BEFORE a command is chosen |
+| `reference/*.md` | the same agent, mid-task | **on demand** | the flags, output shapes and traps of one capability, AFTER it is chosen |
+| `spec/rhwp-behavior.md` | maintainers + deep questions | on demand | what the ENGINE does, one rule per test |
+| `README.md` | a human installing it | never (not the agent's) | setup, install, tiers — Korean |
+
+**The dividing line for SKILL.md vs `reference/`:** does the agent need this to
+CHOOSE the right command, or to USE the command it already chose? Choosing is
+routing and safety — which script, which trap makes the obvious choice wrong,
+which exit code means what. Using is flags, units, output shapes. Only the first
+belongs in SKILL.md.
+
+**This already went wrong.** The `## Reading & extraction` section grew to 8,294
+bytes — 35% of SKILL.md, 2.3× the routing table it was supposed to support —
+because each new reading capability appended its full manual there. Every
+invocation of the skill paid for prose it did not need. It is now a router
+pointing at `reference/reading.md` and `reference/sections.md`, and SKILL.md
+went 23,382 → 16,568 bytes.
+
+Rules, enforced by `test/spec/skill-doc.test.mjs`:
+
+1. **SKILL.md has a size budget** (`SKILL_MD_MAX`). It is a context tax on every
+   invocation; when it is hit, move detail into `reference/`, do not raise the
+   number without saying why in the commit.
+2. **The frontmatter `description` has a HARD 1024-character limit.** Truncation
+   eats the END first — which is where the "NOT for .docx/.xlsx/…" routing sits —
+   so an over-long description does not lose detail, it makes the skill answer
+   other skills' questions. It is also format-routing, not a feature list: a
+   capability only earns trigger words there if someone might ask for it WITHOUT
+   naming the file type.
+3. **Every `reference/` file is pointed to from SKILL.md, and every pointer
+   resolves.** A pointer to a file the payload does not ship is a dead link in
+   every installed copy, and the agent cannot tell that from an unhelpful file.
+4. **`reference/` ships** — it is in `ALLOW_DIRS` in `scripts/_payload.mjs`.
+
+Adding a capability: one row in SKILL.md's routing table (plus a `rule that
+bites` if the obvious use is wrong), and one `reference/<topic>.md` for the rest.
+
 ## Rules that bite if you ignore them
 
 1. Every edit goes through `exportVerify`. The engine will accept an edit in memory and then drop it silently on save, so nothing's done until you reload and confirm. `verified: false` is a failure (exit 5), not a success.

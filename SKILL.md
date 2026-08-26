@@ -69,41 +69,23 @@ The rhwp WASM bundle ships vendored under `vendor/rhwp/` — no `npm install` ne
 
 ## Reading & extraction
 
-- **`info.mjs`** — JSON summary (pages, sections, sourceFormat, fonts, dimensions, hasTable, **memoCount**, field count, engine version). `--validate` adds `getValidationWarnings()` so you can spot a structurally suspect source before extracting.
-- **`read.mjs`** — body text (WASM). **Strict by default**: it does NOT flatten tables (which would misplace merged-cell text); each table becomes a `[table: use extract_tables.mjs for data]` marker plus a stderr warning. `--mode best-effort` flattens inline (with a warning) if you really want it. `--format svg --page N` for a quick visual preview. **Every text read snapshots the inferred section tree** (same baseline as `sections.mjs --op snapshot`, next to the document in `.hwp-snapshots/`). The first read records it; later reads print a since-last-read `+/-/~/M` report on **stderr** and then write a new baseline, so "what changed?" means "since I last looked". `--no-snapshot` opts out; `--snapshot-dir` moves the root. A document with no detectable structure skips the snapshot rather than inventing a tree, and a snapshot failure never fails the read. **Memos surface automatically**: if the document has memos (메모/주석), a plain read appends a `─── 메모 / memos (N) ───` section after the body (the engine hides memos from normal extraction, so this prevents missing them). `--memos` prints only the memos — each with its text **and the body span it is anchored to** (`anchor`) — as JSON, or as `--format text`. `--memos`, `--track-changes` and `--format svg` do not snapshot (they are not a body read).
-- **`read.mjs --track-changes`** — tracked changes (변경 내용 추적) are the memo problem one degree worse: **deleted text is still physically in the paragraph records**, so a plain read prints text the author already removed, inlined with the live body and indistinguishable from it. A plain read now emits a stderr WARNING (with insertion/deletion counts) when — and only when — the document really has them; do not treat that output as the document's final text. `--track-changes` lists each change (kind / author / covered text / location), `--format json` for the full verdict. **HWPX cannot be scanned**: the answer is `NOT CHECKED`, which is not `none`.
-- **`extract_tables.mjs`** — the ONLY safe way to read table data. Rebuilds the grid by cell `{row,col,rowSpan,colSpan}` so a merged cell never leaks onto the wrong record. Flags: `--summary` (sizes + first-row headers, **no cell data** — use this before pulling a grid), `--format csv` (rectangular grid, covered cells empty unless `--fill-merged`), `--data-tables-only` (drop legend/작성요령 tables by header keyword, conservative), `--drop-empty` (normalize placeholders 번호/해당없음/-/X to ""), `--detect-form-type` (annotate marker ①②/label/plain), `--fill-merged`, `--table N`, `--no-nested`. Do **not** dump every table of an unfamiliar file; `--summary` first, then `--table N`.
-- **`search.mjs`** — `searchAllText` plus page and cell coordinates. 0 matches is exit 0. `--limit` sets `truncated` / `totalMatchCount` rather than pretending the rest did not exist.
-- **`extract_data.mjs`** — dates and KRW amounts with the same addresses. `normalized: null` means we did not guess.
-- **`read_precise.mjs`** (enhanced) — accurate text/markdown via the CLI, with real table grids in markdown. Use on Claude Code when you need a faithful markdown rendering.
+Pick the script here; the flags and traps live in **`reference/reading.md`** and
+**`reference/sections.md`** — read those when you need them, not before.
 
-### Document structure — `sections.mjs`
+| Need | Script | Rule that bites |
+|---|---|---|
+| What is this file? | `info.mjs` | Run it first on anything unfamiliar. |
+| Body text | `read.mjs` | Strict by default — **never flattens tables**. Memos appended automatically; a body read also snapshots the section tree and reports what changed since your last read. |
+| Tracked changes | `read.mjs --track-changes` | A plain read of a tracked document mixes DELETED text into the body. Heed the stderr warning. HWPX = `NOT CHECKED`, not `none`. |
+| Table DATA | `extract_tables.mjs` | The ONLY safe path — address-aware. `--summary` before dumping grids. |
+| Find text + addresses | `search.mjs` | 0 matches is exit 0, not an error. |
+| Dates / KRW amounts | `extract_data.mjs` | `normalized: null` means unparsed, never zero. |
+| Outline · one section · split · diff | `sections.mjs --op …` | Structure is **inferred**. Read the `detection:` block on stderr; at `confidence=low` verify with `--op outline` first. "No structure" (exit 3) is a normal answer. |
+| Faithful markdown (code) | `read_precise.mjs` | Enhanced tier — exits 4 off Claude Code. |
 
-Read a document as a STRUCTURE instead of a wall of text.
-
-```bash
-node src/core/sections.mjs <in> --op outline                 # the heading tree
-node src/core/sections.mjs <in> --op extract --id 2.3.1      # one section + breadcrumb
-node src/core/sections.mjs <in> --op extract --id 제12조       # …by document reference
-node src/core/sections.mjs <in> --op split --out-dir chunks/ # one .md per top-level section
-node src/core/sections.mjs <in> --op snapshot                # record a baseline
-node src/core/sections.mjs <in> --op diff                    # what changed since it
-```
-
-**Structure is INFERRED, never read.** Korean HWP documents carry no outline metadata — `headType`/`paraLevel`/`numberingId` read None/0/0 on ~100% of paragraphs, and the built-in 개요 1..7 styles exist in every document but are almost never used. Depth is learned **per document** from marker glyph + indent (□ → ○ → -). So **every run writes a `detection:` block to stderr**: the strategy that won, the ladder (style → clause → marker → table → none) with why each rank was rejected, how many candidates each filter killed, the learned marker→level map, a confidence grade, and an agreement rate against the engine's own `getStructure` (a second opinion — it is 조문-only and returned zero nodes on 6 of 9 real documents, so it is reported, never used). **Read that block.** At `confidence=low` a loud WARNING says to eyeball `--op outline` before trusting an `--op extract`.
-
-**"No structure" is a normal answer, not a bug.** Measured over 60 real Korean documents: 22 got a marker outline, 26 fell back to a **table index**, and 12 exited **3** rather than invent a tree. On exit 3, the two escape hatches are `--detect regex --heading-regex '<pattern>'` (authoritative — `auto` never picks regex on its own) and `--marker-level '{"BOX":1,"CIRCLE":2}'`. Otherwise read the document flat and say so.
-
-**Body-less documents fall back to a table index** rather than an empty tree — the fallback fires when no heading candidate survives (or the document has ≤3 non-empty body blocks) *and* there is at least one table. ~22% of real Korean documents have zero body paragraphs; everything lives inside tables. `--op outline` then lists `1  표 1  [T0]`, exit 0, confidence low. That index is for *navigation only* — `--op extract --id T0` returns the heading line with an **empty body**. Read the data with `extract_tables.mjs`.
-
-- **`--id`** takes an ordinal path (`2.3.1`), a document reference (`제12조`, `T0`), or an exact title. The id comes from the tree position, not from any number printed in the document.
-- **`extract` / `split` emit Markdown**: `# title`, a breadcrumb comment (`<!-- 제1장 총칙 › 제1조(목적) — file.hwp -->`) so a subagent knows where the chunk sits, real markdown table grids, `[^n]` footnotes with bodies after the span. `--format json` for a structured chunk; `--format markdown` is accepted but is currently identical to `text`.
-- **Equations** render inline from the HWP equation script — `$x^2 + y^2 = z^2$`. No pandoc, no OMML; HWP has its own script language. `--equations latex` translates only when the mapping is **complete** and otherwise falls back to the raw script, so a half-translated formula is never dressed up as LaTeX.
-- **`--op split`** writes one file per **top-level** section by default (`000-<ref>-<title>.md`, streamed, so a 40-page document never holds every chunk in memory) and prints each path on stdout. `--level N` adds the deeper sections down to level N — use it when a top-level section is still too big for one subagent.
-- **Scoping**: `--own-text` (a node without its children) · `--level N` (cap outline depth / widen split) · `--max-level N` (default 4; how many levels may be learned) · `--table-mode cells` (tables become placeholders instead of grids).
-- **Snapshots are a user-owned artifact**, not a cache: `.hwp-snapshots/<stem>/` **next to the document** (`--snapshot-dir` to move it), deterministic so an unchanged document re-snapshots byte-identically. `--op diff` prints `변경 없음` when nothing moved, otherwise `+/-/~/M` lines with a word diff, then **re-baselines** so "diff" means "since the last diff" (`--no-update` to keep the old one). A first `--op diff` with no baseline just creates one and exits 0.
-- **A diff across a different `--table-mode` or source format is REFUSED (exit 2)** — it would report ~100% change that never happened. Re-run `--op snapshot`.
-- **Cache**: the parsed model is cached in the OS temp dir keyed on the file's **sha256**, so an edited document can never be served a stale tree (`--no-cache` to bypass). Measured on the largest fixture (`node scripts/bench.mjs`): `--op outline` 427 ms cold, 61 ms warm.
+**Never read table data off flattened text.** `read.mjs` strict mode refuses to
+flatten for exactly this reason: a merged cell's text would attach to the wrong
+record, silently.
 
 ## Editing — the safe path
 
