@@ -17,6 +17,7 @@
 
 import { loadDocument, version, documentHasTable } from "../lib/_bootstrap.mjs";
 import { EXIT, fail } from "../lib/exit-codes.mjs";
+import { collectObjects } from "../lib/objects.mjs";
 import { detectMemos } from "../lib/memo.mjs";
 
 // Minimal option parsing: one positional input path plus an optional
@@ -79,6 +80,23 @@ try {
   memoCount = 0;
 }
 
+// Object counts. Images were invisible to every read path: a document could
+// carry a dozen and nothing in the skill's output said so. `overlayCount` is
+// broken out because a watermark or stamp is not content a reader is missing
+// — it has no place in the body at all — while an ordinary image is.
+// geometry:"never" keeps this cheap; info.mjs is the "open an unfamiliar file"
+// command and must not pay for page layout.
+let imageCount = 0;
+let overlayCount = 0;
+try {
+  const objectModel = await collectObjects(doc, { geometry: "never" });
+  overlayCount = objectModel.overlays.length;
+  imageCount = objectModel.objects.filter((o) => o.kind === "image").length + overlayCount;
+} catch {
+  imageCount = 0;
+  overlayCount = 0;
+}
+
 const summary = {
   input: inputPath,
   engineVersion: version(),
@@ -86,6 +104,8 @@ const summary = {
   sectionCount: doc.getSectionCount(),
   pageCount,
   hasTable: documentHasTable(doc),
+  imageCount,
+  overlayCount,
   memoCount,
   fieldCount: Array.isArray(fields) ? fields.length : 0,
   fonts: Array.isArray(info.fontsUsed) ? info.fontsUsed : [],
