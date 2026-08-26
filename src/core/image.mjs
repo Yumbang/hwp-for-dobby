@@ -429,28 +429,39 @@ if (op === "replace") {
   const target = pictureAt(doc, index);
   const { section: s, paragraph: p, controlIndex: c } = target;
 
-  // assignPictureImage keeps width/height/treatAsChar/border/description, but
-  // it RESETS the crop. Read it first and put it back, or "replace the image,
-  // keep the formatting" quietly loses the crop.
+  // assignPictureImage keeps width/height/treatAsChar/border/description, but it
+  // REWRITES THE CROP — and not to zero. It recomputes it from the new image's
+  // pixel dimensions against the stored box, so swapping a 1600x1200 picture for
+  // a 200x150 one leaves cropRight=5000 cropBottom=3750 on a picture that had no
+  // crop at all: a quarter of the new image is cut off. Only a replacement with
+  // identical pixel dimensions comes back clean.
+  //
+  // So the crop is restored UNCONDITIONALLY, not just when there was one. "Keep
+  // the formatting, swap the image" means the box and the crop are whatever they
+  // were, and an all-zero crop is a real value meaning "show the whole image" —
+  // skipping the restore because it looked like nothing is how the common case
+  // (a replacement of a different size) ends up cropped.
   const before = target.props;
   const crop = {
     cropLeft: before.cropLeft, cropTop: before.cropTop,
     cropRight: before.cropRight, cropBottom: before.cropBottom,
   };
-  const hadCrop = Object.values(crop).some((v) => v);
 
   try {
     JSON.parse(doc.assignPictureImage(s, p, "", c, img.bytes, img.size.width, img.size.height, img.ext));
   } catch (e) {
     fail(EXIT.CORRUPTION, `error: replace failed for image ${index}: ${e?.message ?? e}`);
   }
-  if (hadCrop) doc.setPictureProperties(s, p, c, JSON.stringify(crop));
+  doc.setPictureProperties(s, p, c, JSON.stringify(crop));
   if (caption !== null) writeCaption(doc, s, p, c, caption);
 
   Object.assign(summary, {
     index, section: s, paragraph: p, controlIndex: c,
     width: before.width, height: before.height,
-    preserved: { treatAsChar: before.treatAsChar, width: before.width, height: before.height, cropRestored: hadCrop },
+    preserved: {
+      treatAsChar: before.treatAsChar, width: before.width, height: before.height,
+      crop, cropRestored: true,
+    },
     caption: caption ?? null,
   });
 }
@@ -497,6 +508,10 @@ try {
           : "",
       };
       summary.confirmed.vertRelTo = saved.props.vertRelTo;
+      summary.confirmed.crop = {
+        cropLeft: saved.props.cropLeft, cropTop: saved.props.cropTop,
+        cropRight: saved.props.cropRight, cropBottom: saved.props.cropBottom,
+      };
       summary.confirmed.horzRelTo = saved.props.horzRelTo;
       if (
         op === "insert" && !asFloat &&
@@ -507,6 +522,15 @@ try {
           "error: the image is inline but still anchored to the PAPER on disk.\n" +
             "       Setting treatAsChar alone does not persist the anchor change; it must be\n" +
             "       written explicitly. The output is not safe to use as-is.",
+        );
+      }
+      if (op === "replace" && JSON.stringify(summary.confirmed.crop) !== JSON.stringify(summary.preserved.crop)) {
+        process.stderr.write(JSON.stringify({ wanted: summary.preserved.crop, got: summary.confirmed.crop }) + "\n");
+        fail(
+          EXIT.CORRUPTION,
+          "error: the replacement changed the picture's CROP on disk.\n" +
+            "       assignPictureImage recomputes the crop from the new image's pixel size,\n" +
+            "       and the restore did not take — part of the new image would be cut off.",
         );
       }
       if (op === "insert" && !asFloat && saved.props.treatAsChar !== true) {

@@ -58,31 +58,29 @@ it fits and **REFUSED (exit 2) when it does not** — never silently clamped,
 because a caller who asked for a specific width and quietly got another is how
 the layout breaks without anyone noticing. Omit `--width` to have it fitted.
 
-## Replacing an image keeps the formatting — except the crop
+## Replacing an image keeps the formatting — but REWRITES the crop
 
 `--op replace` uses `assignPictureImage`, which preserves `width`, `height`,
 `treatAsChar`, `borderWidth` and `description`.
 
-**It resets the crop** (`cropLeft` 100 → 0, verified). So `image.mjs` reads the
-crop before the swap and writes it back after. If you ever call the engine
-directly, do the same or "replace the picture, keep the formatting" silently
-loses it.
+**It does not preserve the crop, and it does not merely reset it — it
+RECOMPUTES it from the new image's pixel dimensions.** Measured:
 
-## Placement is per PARAGRAPH — `char_offset` is ignored
+| Replacement | crop before | crop after |
+|---|---|---|
+| 1600×1200 → 200×150 | `0,0,0,0` | **`0,0,5000,3750`** |
+| 1600×1200 → 1600×1200 | `0,0,0,0` | `0,0,0,0` |
+| a picture cropped `120,80,60,40` | `120,80,60,40` | `0,0,5000,3750` |
 
-`insertPicture`'s `char_offset` does nothing for a body image. Measured on a
-16-character paragraph: offsets 0, 5 and 9 ALL put the picture at 16, the end.
-The returned `logicalOffset` (17) does not even match where the control lands
-(`getControlTextPositions` reports 16).
+So swapping in an image of a *different* pixel size silently crops a quarter off
+a picture that was never cropped — and a replacement rarely has identical pixel
+dimensions, so that is the ORDINARY case, not an edge one.
 
-So an image cannot be placed mid-paragraph. `image.mjs` has no `--offset` and
-refuses one if given, rather than accepting a number it would silently ignore.
-To control where an image goes, make a paragraph for it:
-
-```bash
-node src/core/edit_text.mjs <in> --op insert-paragraph --section 0 --paragraph 4 --output tmp.hwp
-node src/core/image.mjs tmp.hwp --op insert --file pic.png --section 0 --paragraph 4 --output out.hwp
-```
+`image.mjs` therefore reads the crop before the swap and writes it back
+**unconditionally**, then re-reads the saved file and fails (exit 5) if the crop
+on disk is not the crop the picture started with. An all-zero crop is a real
+value meaning "show the whole image"; treating it as "nothing to restore" is
+exactly how the common case ends up cropped.
 
 ## Captions are addressed like a table cell
 

@@ -308,3 +308,59 @@ test("caption: the engine's trailing space is not treated as a mismatch", async 
     assert.equal(saved.trimEnd(), text, "…and trimEnd makes them equal");
   });
 });
+
+// ── crop: the trap that makes "keep the formatting" untrue ────────────────
+
+test("replace: a DIFFERENT-sized image does not leave the picture cropped", async () => {
+  // The engine does not merely reset the crop on assignPictureImage — it
+  // RECOMPUTES it from the new image's pixel dimensions. Swapping a 1600x1200
+  // picture for a 200x150 one leaves cropRight=5000 cropBottom=3750 on a
+  // picture that had NO crop, cutting a quarter off the new image. This is the
+  // ordinary case (a replacement rarely has identical pixel dimensions), so it
+  // is the one that matters most.
+  await withTmp(async ({ dir, out }) => {
+    const small = join(dir, "small.png");
+    writeFileSync(small, png(200, 150, [200, 40, 40]));
+
+    const before = listOf(FIXTURE).images.find((i) => i.treatAsChar);
+    const r = run([FIXTURE, "--op", "replace", "--index", String(before.index),
+      "--file", small, "--output", out]);
+    assert.equal(r.status, 0, r.stderr);
+
+    const j = JSON.parse(r.stdout);
+    assert.deepEqual(
+      j.confirmed.crop, j.preserved.crop,
+      "the crop on disk must equal the crop the picture had before the swap",
+    );
+    assert.deepEqual(
+      j.confirmed.crop,
+      { cropLeft: 0, cropTop: 0, cropRight: 0, cropBottom: 0 },
+      "an uncropped picture must still be uncropped after the replacement",
+    );
+  });
+});
+
+test("replace: an existing crop is carried across the swap", async () => {
+  // The other direction: a picture the user HAD cropped must keep that crop.
+  await withTmp(async ({ dir, img, out }) => {
+    const cropped = join(dir, "cropped.hwp");
+    const target = listOf(FIXTURE).images.find((i) => i.treatAsChar);
+
+    // Put a real crop on it first, through the same public surface.
+    const setup = spawnSync(process.execPath, ["-e", `
+      const { loadDocument, atomicWriteFile } = await import("./src/lib/_bootstrap.mjs");
+      const d = await loadDocument(${JSON.stringify(join(ROOT, FIXTURE))});
+      d.setPictureProperties(${target.section}, ${target.paragraph}, ${target.controlIndex},
+        JSON.stringify({ cropLeft: 120, cropTop: 80, cropRight: 60, cropBottom: 40 }));
+      atomicWriteFile(${JSON.stringify(cropped)}, Buffer.from(d.exportHwp()));
+    `.replace(/\n/g, "\n")], { cwd: ROOT, encoding: "utf8", env: { ...process.env } });
+    assert.equal(setup.status, 0, `setup failed: ${setup.stderr}`);
+
+    const r = run([cropped, "--op", "replace", "--index", String(target.index),
+      "--file", img, "--output", out]);
+    assert.equal(r.status, 0, r.stderr);
+    const j = JSON.parse(r.stdout);
+    assert.deepEqual(j.preserved.crop, { cropLeft: 120, cropTop: 80, cropRight: 60, cropBottom: 40 });
+    assert.deepEqual(j.confirmed.crop, j.preserved.crop, "the user's crop must survive the swap");
+  });
+});
