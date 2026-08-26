@@ -37,6 +37,23 @@ export const CASES = [
     argv: ["samples/fixture-table.hwp", "--format", "text", "--page", "all", "--mode", "strict", "--no-snapshot"],
   },
 
+  // Images. fixture-image.hwp carries one default/floating picture, one
+  // treatAsChar one, and one with a caption — so these cases pin the marker
+  // format, the relative sizing, and the overlay separation. Without them the
+  // golden set had no document with a picture in it at all, and the render
+  // change that introduced markers was invisible to every case.
+  { name: "read/images", script: "src/core/read.mjs", argv: ["samples/fixture-image.hwp", "--no-snapshot"] },
+  {
+    name: "read/images-no-snapshot-json-info",
+    script: "src/core/info.mjs",
+    argv: ["samples/fixture-image.hwp"],
+  },
+  {
+    name: "tables/image-doc-json",
+    script: "src/core/extract_tables.mjs",
+    argv: ["samples/fixture-image.hwp"],
+  },
+
   // ── read.mjs: memos (the guard's read path) ──────────────────────────────
   {
     name: "read/memo-auto-surfaced",

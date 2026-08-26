@@ -653,3 +653,47 @@ export async function collectObjects(doc, { geometry = "auto" } = {}) {
 }
 
 export { WRAP_AROUND, WRAP_OVERLAY, VERT_PAGE_ANCHORED, PAGE_SEARCH_RADIUS };
+
+// ── the inline marker a reader sees ───────────────────────────────────────
+//
+// What goes into rendered body text where a picture sits. Three decisions,
+// each from a measurement:
+//
+// SIZE IS RELATIVE, not absolute. "150x112mm" cannot be judged without knowing
+// the page is 210mm wide; "100% of the text column" answers "is this a
+// full-width figure or an icon?" immediately, and it is the same language the
+// insert path already refuses oversized images in. getPageDef costs 0.004ms, so
+// the denominator is effectively free. Absolute mm rides along second.
+//
+// THE FILENAME IS WORTH PRINTING, BARELY. Hancom auto-fills a description like
+// "그림입니다.\n원본 그림의 이름: 그림3.png\n원본 그림의 크기: ...", and it is
+// present on 40 of 41 pictures across 40 real documents — but the names are
+// auto-numbered (그림3.png, 그림8.png), so it identifies WHICH picture rather
+// than what it shows. Printed when it exists, never faked when it does not.
+//
+// PLACEMENT IS NAMED. "beside" tells a reader the body text flows around this
+// thing, so the paragraph either side may read oddly — the sort of thing that
+// otherwise looks like an extraction bug.
+const FILENAME_RE = /원본 그림의 이름:\s*([^\r\n]+)/;
+
+export function pictureFilename(altText) {
+  const m = FILENAME_RE.exec(String(altText ?? ""));
+  return m ? m[1].trim() : null;
+}
+
+export function pictureMarker(props, { usableWidth = 0, placement = null } = {}) {
+  const place = placement ?? classifyPlacement(props).placement;
+  const name = pictureFilename(props?.description);
+  const w = Number(props?.width) || 0;
+  const bits = [];
+  if (name) bits.push(`"${name}"`);
+  if (usableWidth > 0 && w > 0) {
+    const pct = Math.round((w / usableWidth) * 100);
+    bits.push(`${pct}% of text width`);
+    if (pct > 100) bits.push("WIDER THAN THE TEXT COLUMN");
+  } else if (w > 0) {
+    bits.push(`${w} HWPUNIT wide`);
+  }
+  bits.push(place);
+  return `[image ${bits.join(" · ")}]`;
+}

@@ -80,9 +80,11 @@ import {
   documentHasTable,
   eachParagraph,
   paragraphText,
+  pictureControlsInParagraph,
   tableControlsInParagraph,
 } from "../lib/doc_walk.mjs";
 import { EXIT, fail } from "../lib/exit-codes.mjs";
+import { classifyPlacement, pictureMarker } from "../lib/objects.mjs";
 import { readMemos } from "../lib/memo.mjs";
 import { flatLoc, readCellText, tableDims } from "../lib/tables.mjs";
 import { detectTrackChanges, readTrackChanges } from "../lib/trackchange.mjs";
@@ -350,14 +352,36 @@ if (format === "svg") {
     }
   };
 
+  // getPageDef is a property read (0.004 ms), not pagination, so every marker
+  // can be relative to the real text column. Memoized per section anyway.
+  const usableCache = new Map();
+  const usableFor = (sec) => {
+    if (usableCache.has(sec)) return usableCache.get(sec);
+    let w = 0;
+    try {
+      const pd = JSON.parse(doc.getPageDef(sec));
+      w = Math.max(0, (pd.width ?? 0) - (pd.marginLeft ?? 0) - (pd.marginRight ?? 0));
+    } catch {
+      w = 0;
+    }
+    usableCache.set(sec, w);
+    return w;
+  };
+  const overlayLines = [];
+
   for (const { s, p } of eachParagraph(doc)) {
     const tableCtrls = tableControlsInParagraph(doc, s, p);
+    // Pictures were dropped here along with the invisible SectionDef/ColumnDef
+    // controls: a document could carry a dozen images and this output showed
+    // nothing at all. Markers are sized RELATIVE to the text column, because
+    // "150mm" cannot be judged without knowing how wide the page is.
+    const pics = pictureControlsInParagraph(doc, s, p);
 
     // Body text of the paragraph (present even on table-hosting paragraphs;
     // a table control sits inline but its text is not in the paragraph body).
     const body = paragraphText(doc, s, p);
 
-    if (tableCtrls.length === 0) {
+    if (tableCtrls.length === 0 && pics.length === 0) {
       // Plain paragraph: emit body text (may be empty → blank line, which
       // preserves paragraph spacing in the output stream).
       writeBody(body);
@@ -367,6 +391,17 @@ if (format === "svg") {
     // Table-hosting paragraph. Emit any leading body text, then handle each
     // table per the active mode.
     if (body.length) writeBody(body);
+    for (const pic of pics) {
+      const place = classifyPlacement(pic.props ?? {});
+      const marker = pictureMarker(pic.props ?? {}, {
+        usableWidth: usableFor(s),
+        placement: place.placement,
+      });
+      // An overlay (watermark, stamp) has no reading position; placing it in
+      // the body would invent one. Collected and reported after the body.
+      if (place.placement === "overlay") overlayLines.push(marker);
+      else writeBody(marker);
+    }
     for (const ctrl of tableCtrls) {
       if (mode === "strict") {
         writeBody(PLACEHOLDER);
@@ -374,6 +409,16 @@ if (format === "svg") {
         flattenTableInline(doc, s, p, ctrl, writeBody);
       }
     }
+  }
+
+  if (overlayLines.length) {
+    process.stdout.write(`\n─── overlay images (${overlayLines.length}) ───\n`);
+    for (const l of overlayLines) process.stdout.write(l + "\n");
+    process.stderr.write(
+      `NOTE: ${overlayLines.length} image(s) sit on an overlay plane (watermark/stamp).\n` +
+        `      They have no position in the reading flow, so they are listed separately\n` +
+        `      rather than placed in the body.\n`,
+    );
   }
 
   if (cut) {

@@ -15,7 +15,9 @@
 // EVERY SECTION'S FIRST PARAGRAPH CARRIES INVISIBLE CONTROLS at offset 0
 // (SectionDef / ColumnDef). Treating every control as a renderable object puts
 // phantom markers at position 0 of every section. They are classified as
-// "other" here and dropped by callers.
+// "other" here and dropped by callers. Pictures used to land in that same
+// bucket and were therefore dropped too — invisible to every read path — which
+// is why "picture" is now its own kind.
 //
 // findNearestControlForward IS NOT AN ENUMERATOR. It looks like a cheap typed
 // sweep — one call per control, type included — but it is cursor navigation for
@@ -123,6 +125,22 @@ export function isTableControl(doc, s, p, c) {
   }
 }
 
+// Picture controls in paragraph (s,p), with their properties. One engine call
+// per control, the same shape of probe as isTableControl — cheap enough for a
+// whole-document walk, which is what read.mjs does.
+export function pictureControlsInParagraph(doc, s, p) {
+  const offsets = controlOffsets(doc, s, p);
+  const out = [];
+  for (let c = 0; c < offsets.length; c++) {
+    try {
+      out.push({ index: c, offset: offsets[c], props: JSON.parse(doc.getPictureProperties(s, p, c)) });
+    } catch {
+      /* not a picture */
+    }
+  }
+  return out;
+}
+
 // Indices of the table controls in paragraph (s,p), in control order.
 export function tableControlsInParagraph(doc, s, p) {
   const n = controlCount(doc, s, p);
@@ -138,7 +156,8 @@ export function tableControlsInParagraph(doc, s, p) {
 //   { kind: "table",    index, offset, dims: {rowCount, colCount, cellCount} }
 //   { kind: "equation", index, offset, script, props }
 //   { kind: "footnote", index, offset, number, texts, paraCount, totalTextLen }
-//   { kind: "other",    index, offset }   ← pictures, shapes, fields, SectionDef…
+//   { kind: "picture",  index, offset, props }
+//   { kind: "other",    index, offset }   ← shapes, fields, SectionDef/ColumnDef…
 export function classifyControl(doc, s, p, c, offset = null) {
   const base = { index: c, offset };
 
@@ -162,6 +181,13 @@ export function classifyControl(doc, s, p, c, offset = null) {
     return { ...base, kind: "equation", script: String(props?.script ?? ""), props };
   } catch (e) {
     if (isOutOfRangeError(e)) return { ...base, kind: "other", outOfRange: true };
+  }
+
+  try {
+    const props = JSON.parse(doc.getPictureProperties(s, p, c));
+    return { ...base, kind: "picture", props };
+  } catch {
+    /* not a picture */
   }
 
   try {
