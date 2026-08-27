@@ -297,7 +297,8 @@ export function validateProps(op, props, { allowUnknown = false } = {}) {
 //
 // Numeric values are reported as "unverifiable" rather than "no-effect" when
 // unchanged, because the engine converts units on the way in (marginLeft 2000
-// HWPUNIT reads back as 13.3pt), so re-applying a value a paragraph already has
+// HWPUNIT reads back as 13.3 — in the getter's own unit of 1/48 inch, NOT points;
+// see spec rule 66), so re-applying a value a paragraph already has
 // is indistinguishable from a value that was ignored. Booleans, colors and
 // enums round-trip comparably and get a real verdict.
 export function classifyEffect(key, requested, before, after) {

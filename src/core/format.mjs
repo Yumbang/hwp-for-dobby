@@ -69,6 +69,12 @@ import {
   textPrefix,
 } from "../lib/bullets.mjs";
 import { classifyEffect, validateProps } from "../lib/format_props.mjs";
+import {
+  detectIndentScheme,
+  hangingIndentFor,
+  marginForLevel,
+  reindentText,
+} from "../lib/indent.mjs";
 import { assertMemoSafe } from "../lib/memo.mjs";
 import { assertTrackChangeSafe } from "../lib/trackchange.mjs";
 import { exportVerify } from "../lib/verify.mjs";
@@ -77,7 +83,9 @@ const USAGE =
   "usage: format.mjs <input> --op char|para --section N --paragraph N " +
   "[--start N --end N] --props '<json>' [--allow-unknown-props] --output <out.hwp>\n" +
   "       format.mjs <input> --op bullet --section N --paragraphs 6-9 " +
-  "[--char '□'] [--level N] [--mode auto|hwp|text] [--remove] --output <out.hwp>";
+  "[--char '□'] [--level N] [--mode auto|hwp|text] [--remove] --output <out.hwp>\n" +
+  "       format.mjs <input> --op indent --section N --paragraphs 6-9 --level N " +
+  "[--scheme auto|space|margin] [--no-hanging] --output <out.hwp>";
 
 // Option parsing in the style of the sibling core scripts (replace.mjs): one
 // positional input plus named flags. Kept small.
@@ -109,6 +117,8 @@ const bulletChar = arg("--char");
 const bulletLevel = intArg("--level");
 const bulletMode = arg("--mode");
 const bulletRemove = flag("--remove");
+const indentScheme = arg("--scheme");
+const noHanging = flag("--no-hanging");
 
 if (flag("-h") || flag("--help")) {
   process.stdout.write(USAGE + "\n");
@@ -117,11 +127,11 @@ if (flag("-h") || flag("--help")) {
 
 // --- argument validation -----------------------------------------------------
 if (!input || input.startsWith("-") || !output) fail(EXIT.USAGE, USAGE);
-if (op !== "char" && op !== "para" && op !== "bullet")
-  fail(EXIT.USAGE, `error: --op must be 'char', 'para' or 'bullet'\n${USAGE}`);
+if (op !== "char" && op !== "para" && op !== "bullet" && op !== "indent")
+  fail(EXIT.USAGE, `error: --op must be 'char', 'para', 'bullet' or 'indent'\n${USAGE}`);
 if (!Number.isInteger(section) || section < 0)
   fail(EXIT.USAGE, `error: --section must be a non-negative integer\n${USAGE}`);
-if (op !== "bullet") {
+if (op !== "bullet" && op !== "indent") {
   if (!Number.isInteger(paragraph) || paragraph < 0)
     fail(EXIT.USAGE, `error: --paragraph must be a non-negative integer\n${USAGE}`);
   if (propsRaw === undefined)
@@ -155,6 +165,24 @@ if (op === "bullet") {
   }
 }
 
+// indent takes the same paragraph set as bullet, plus a required --level.
+let indentTargets = null;
+if (op === "indent") {
+  indentTargets = paragraphSet("--paragraphs", paragraphsRaw, USAGE);
+  if (bulletLevel === undefined) {
+    fail(EXIT.USAGE, `error: --op indent requires --level N (0 is the outermost level)\n${USAGE}`);
+  }
+  if (!Number.isInteger(bulletLevel) || bulletLevel < 0) {
+    fail(EXIT.USAGE, `error: --level must be a non-negative integer\n${USAGE}`);
+  }
+  if (indentScheme !== undefined && !["auto", "space", "margin"].includes(indentScheme)) {
+    fail(EXIT.USAGE, `error: --scheme must be auto|space|margin (got ${JSON.stringify(indentScheme)})\n${USAGE}`);
+  }
+  if (propsRaw !== undefined) {
+    fail(EXIT.USAGE, `error: --op indent does not take --props; use --level and --scheme\n${USAGE}`);
+  }
+}
+
 // char needs an explicit [start, end) range; para applies to the whole paragraph.
 if (op === "char") {
   if (!Number.isInteger(start) || start < 0)
@@ -169,9 +197,10 @@ if (op === "char") {
 // itself silently accepts garbage (unknown keys, empty, even malformed strings —
 // all return ok:true), so this is the only guard against a typo'd or non-object
 // payload. We pass the ORIGINAL string through to the engine unchanged.
-// --op bullet carries no --props: its vocabulary is --char/--level/--mode.
+// --op bullet and --op indent carry no --props: their vocabulary is
+// --char/--level/--mode and --level/--scheme respectively.
 let props;
-if (op !== "bullet") {
+if (op !== "bullet" && op !== "indent") {
   try {
     props = JSON.parse(propsRaw);
   } catch (e) {
@@ -193,7 +222,7 @@ if (op !== "bullet") {
       errors.map((e) => `error: ${e}`).join("\n") + `\n${USAGE}`,
     );
   }
-} else if (propsRaw !== undefined) {
+} else if (op === "bullet" && propsRaw !== undefined) {
   fail(
     EXIT.USAGE,
     `error: --op bullet does not take --props; use --char '<glyph>' and --level N\n${USAGE}`,
@@ -402,6 +431,137 @@ if (op === "bullet") {
       verified: true,
       bytesWritten: bResult.bytesWritten,
       outputPath: bResult.outputPath,
+    }) + "\n",
+  );
+  process.exit(EXIT.OK);
+}
+
+// --- --op indent -------------------------------------------------------------
+//
+// Depth, on a set of paragraphs. Two schemes, because real documents use two
+// and `marginLeft` is the MINORITY one — see lib/indent.mjs for the counts.
+if (op === "indent") {
+  const secCount = doc.getSectionCount();
+  if (section >= secCount) {
+    fail(EXIT.NOT_FOUND, `error: section ${section} out of range (document has ${secCount})`);
+  }
+  const paraCount = doc.getParagraphCount(section);
+  const oob = indentTargets.filter((p) => p >= paraCount);
+  if (oob.length) {
+    fail(
+      EXIT.NOT_FOUND,
+      `error: paragraph ${oob.join(", ")} out of range for section ${section} (valid 0..${paraCount - 1})`,
+    );
+  }
+
+  const detected = detectIndentScheme(doc, { section });
+  const scheme = indentScheme === undefined || indentScheme === "auto" ? detected.scheme : indentScheme;
+  const level = bulletLevel;
+  const changes = [];
+
+  for (const p of indentTargets) {
+    const len = doc.getParagraphLength(section, p);
+    const text = len > 0 ? doc.getTextRange(section, p, 0, len) : "";
+    // The paragraph's own font size sizes the hang; a 14pt list needs a wider
+    // hang than a 10pt one for the wrapped lines to land in the same place.
+    let fontSize;
+    try {
+      fontSize = len > 0 ? JSON.parse(doc.getCharPropertiesAt(section, p, 0)).fontSize : undefined;
+    } catch {
+      fontSize = undefined;
+    }
+
+    if (scheme === "margin") {
+      const marginLeft = marginForLevel(level, fontSize);
+      const r = JSON.parse(doc.applyParaFormat(section, p, JSON.stringify({ marginLeft })));
+      if (!r || r.ok !== true) {
+        fail(EXIT.CORRUPTION, `error: indent failed at paragraph ${p}: ${JSON.stringify(r)}`);
+      }
+      changes.push({ paragraph: p, scheme, level, marginLeft });
+      continue;
+    }
+
+    // scheme === "space"
+    const next = reindentText(text, level);
+    if (next.dropped > 0) doc.deleteText(section, p, 0, next.dropped);
+    const prefix = next.text.slice(0, next.text.length - (text.length - next.dropped));
+    if (prefix.length > 0) doc.insertText(section, p, 0, prefix);
+
+    // The hang is not optional decoration. Leading spaces without it wrap the
+    // continuation lines back to column 0; in the corpus, 91% of space-indented
+    // paragraphs long enough to wrap set one. Only a marker paragraph gets it —
+    // a hanging indent on ordinary prose is just a broken first line.
+    let hangingIndent = null;
+    if (next.hasMarker && !noHanging) {
+      hangingIndent = hangingIndentFor(level, fontSize);
+      const r = JSON.parse(doc.applyParaFormat(section, p, JSON.stringify({ indent: hangingIndent })));
+      if (!r || r.ok !== true) {
+        fail(EXIT.CORRUPTION, `error: hanging indent failed at paragraph ${p}: ${JSON.stringify(r)}`);
+      }
+    }
+    changes.push({ paragraph: p, scheme, level, prefix, hasMarker: next.hasMarker, hangingIndent });
+  }
+
+  let iResult;
+  try {
+    iResult = await exportVerify(doc, output, {});
+  } catch (e) {
+    fail(EXIT.CORRUPTION, `error: export/verify failed: ${e?.message ?? e}`);
+  }
+  if (!iResult.verified) {
+    process.stderr.write(JSON.stringify(iResult) + "\n");
+    fail(EXIT.CORRUPTION, `error: round-trip verification failed — ${output} did not reload cleanly.`);
+  }
+
+  // Confirm from the SAVED file. marginLeft comes back unit-converted (HWPUNIT
+  // in, points out) so it is checked as "moved in the right direction and is
+  // non-zero when it should be", not for an exact match — the same reason
+  // classifyEffect reports converted numbers as unverifiable.
+  const back = await loadDocument(iResult.outputPath);
+  const confirmed = [];
+  for (const c of changes) {
+    const len = back.getParagraphLength(section, c.paragraph);
+    const text = len > 0 ? back.getTextRange(section, c.paragraph, 0, Math.min(len, 80)) : "";
+    const pp = JSON.parse(back.getParaPropertiesAt(section, c.paragraph));
+    let ok;
+    if (c.scheme === "margin") {
+      ok = level === 0 ? pp.marginLeft === 0 : pp.marginLeft > 0;
+    } else {
+      ok = text.startsWith(c.prefix);
+      if (ok && c.hangingIndent !== null) ok = pp.indent < 0;
+    }
+    confirmed.push({ ...c, confirmed: ok });
+  }
+  const bad = confirmed.filter((c) => !c.confirmed);
+  if (bad.length) {
+    process.stdout.write(JSON.stringify({ ...iResult, changes: confirmed }) + "\n");
+    fail(
+      EXIT.CORRUPTION,
+      `error: the indent did NOT take on disk for paragraph ${bad.map((c) => c.paragraph).join(", ")}. ` +
+        `Do not deliver ${output}.`,
+    );
+  }
+  if (scheme === "space" && !noHanging && confirmed.every((c) => !c.hasMarker)) {
+    process.stderr.write(
+      `WARNING: none of the selected paragraphs carries a bullet marker, so no hanging ` +
+        `indent was set — only the leading spaces changed. If these are list items, set ` +
+        `the marker first with --op bullet.\n`,
+    );
+  }
+
+  process.stdout.write(
+    JSON.stringify({
+      ok: true,
+      op: "indent",
+      section,
+      scheme,
+      schemeSource: indentScheme === undefined || indentScheme === "auto" ? "auto" : "explicit",
+      detected,
+      level,
+      changes: confirmed,
+      verified: true,
+      bytesWritten: iResult.bytesWritten,
+      outputPath: iResult.outputPath,
     }) + "\n",
   );
   process.exit(EXIT.OK);
