@@ -42,7 +42,7 @@ Output is **always HWP 5.0 (`.hwp`)**. Native HWPX save is rejected by Hancom Of
 | Edit a table cell | `node src/core/edit_cell.mjs <in> --op set --table N --row R --col C --text "..." --output <out.hwp>` (same `index` as extract_tables; or `--section/--paragraph/--control`) |
 | **Images** (list · insert · replace · caption) | `node src/core/image.mjs <in> --op list\|insert\|replace\|remove [--file img.png] [--index N] [--caption "..."] --output <out.hwp>` |
 | Create/merge/split a table | `node src/core/table.mjs <in> --op create\|merge\|split ... --output <out.hwp>` |
-| Char/paragraph formatting | `node src/core/format.mjs <in> --op char\|para ... --props '<json>' --output <out.hwp>` |
+| **Formatting** (char · para · bullets) | `node src/core/format.mjs <in> --op char\|para\|bullet ... --output <out.hwp>` — `--op bullet --paragraphs 6-9 --char '□' [--level N] [--remove]`. Korean lists are a typed glyph ~2x more often than HWP's bullet feature; `--mode auto` follows the document |
 | Header/footer | `node src/core/header_footer.mjs <in> --op create\|apply ... --output <out.hwp>` |
 | Footnote | `node src/core/footnote.mjs <in> --op insert\|delete ... --output <out.hwp>` |
 | List / fill form fields | `node src/core/fill_form.mjs <in> --list` · `--values vals.json --output <out.hwp>` · duplicate names use `name[N]` · `--dry-run` · `--rows file.jsonl --out-dir dir/` |

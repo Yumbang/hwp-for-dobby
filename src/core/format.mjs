@@ -60,6 +60,14 @@
 
 import { loadDocument } from "../lib/_bootstrap.mjs";
 import { EXIT, fail } from "../lib/exit-codes.mjs";
+import { paragraphSet } from "../lib/argv.mjs";
+import {
+  BULLET_GLYPHS,
+  assertBulletChar,
+  detectBulletMode,
+  parseMarker,
+  textPrefix,
+} from "../lib/bullets.mjs";
 import { classifyEffect, validateProps } from "../lib/format_props.mjs";
 import { assertMemoSafe } from "../lib/memo.mjs";
 import { assertTrackChangeSafe } from "../lib/trackchange.mjs";
@@ -67,7 +75,9 @@ import { exportVerify } from "../lib/verify.mjs";
 
 const USAGE =
   "usage: format.mjs <input> --op char|para --section N --paragraph N " +
-  "[--start N --end N] --props '<json>' [--allow-unknown-props] --output <out.hwp>";
+  "[--start N --end N] --props '<json>' [--allow-unknown-props] --output <out.hwp>\n" +
+  "       format.mjs <input> --op bullet --section N --paragraphs 6-9 " +
+  "[--char '□'] [--level N] [--mode auto|hwp|text] [--remove] --output <out.hwp>";
 
 // Option parsing in the style of the sibling core scripts (replace.mjs): one
 // positional input plus named flags. Kept small.
@@ -94,6 +104,11 @@ const start = intArg("--start");
 const end = intArg("--end");
 const propsRaw = arg("--props");
 const output = arg("--output");
+const paragraphsRaw = arg("--paragraphs");
+const bulletChar = arg("--char");
+const bulletLevel = intArg("--level");
+const bulletMode = arg("--mode");
+const bulletRemove = flag("--remove");
 
 if (flag("-h") || flag("--help")) {
   process.stdout.write(USAGE + "\n");
@@ -102,14 +117,43 @@ if (flag("-h") || flag("--help")) {
 
 // --- argument validation -----------------------------------------------------
 if (!input || input.startsWith("-") || !output) fail(EXIT.USAGE, USAGE);
-if (op !== "char" && op !== "para")
-  fail(EXIT.USAGE, `error: --op must be 'char' or 'para'\n${USAGE}`);
+if (op !== "char" && op !== "para" && op !== "bullet")
+  fail(EXIT.USAGE, `error: --op must be 'char', 'para' or 'bullet'\n${USAGE}`);
 if (!Number.isInteger(section) || section < 0)
   fail(EXIT.USAGE, `error: --section must be a non-negative integer\n${USAGE}`);
-if (!Number.isInteger(paragraph) || paragraph < 0)
-  fail(EXIT.USAGE, `error: --paragraph must be a non-negative integer\n${USAGE}`);
-if (propsRaw === undefined)
-  fail(EXIT.USAGE, `error: --props <json> is required\n${USAGE}`);
+if (op !== "bullet") {
+  if (!Number.isInteger(paragraph) || paragraph < 0)
+    fail(EXIT.USAGE, `error: --paragraph must be a non-negative integer\n${USAGE}`);
+  if (propsRaw === undefined)
+    fail(EXIT.USAGE, `error: --props <json> is required\n${USAGE}`);
+}
+
+// bullet takes --paragraphs (a set), and either a --char to set or --remove.
+let bulletTargets = null;
+let bulletGlyph = null;
+if (op === "bullet") {
+  bulletTargets = paragraphSet("--paragraphs", paragraphsRaw, USAGE);
+  if (bulletRemove) {
+    if (bulletChar !== undefined) {
+      fail(EXIT.USAGE, `error: --remove and --char are mutually exclusive\n${USAGE}`);
+    }
+  } else {
+    if (bulletChar === undefined) {
+      fail(
+        EXIT.USAGE,
+        `error: --op bullet requires --char '<glyph>' (or --remove).\n` +
+          `       Common 개조식 glyphs, outermost first: ${BULLET_GLYPHS.slice(0, 8).join(" ")}\n${USAGE}`,
+      );
+    }
+    bulletGlyph = assertBulletChar(bulletChar);
+  }
+  if (bulletLevel !== undefined && (!Number.isInteger(bulletLevel) || bulletLevel < 0)) {
+    fail(EXIT.USAGE, `error: --level must be a non-negative integer\n${USAGE}`);
+  }
+  if (bulletMode !== undefined && !["auto", "hwp", "text"].includes(bulletMode)) {
+    fail(EXIT.USAGE, `error: --mode must be auto|hwp|text (got ${JSON.stringify(bulletMode)})\n${USAGE}`);
+  }
+}
 
 // char needs an explicit [start, end) range; para applies to the whole paragraph.
 if (op === "char") {
@@ -125,19 +169,20 @@ if (op === "char") {
 // itself silently accepts garbage (unknown keys, empty, even malformed strings —
 // all return ok:true), so this is the only guard against a typo'd or non-object
 // payload. We pass the ORIGINAL string through to the engine unchanged.
+// --op bullet carries no --props: its vocabulary is --char/--level/--mode.
 let props;
-try {
-  props = JSON.parse(propsRaw);
-} catch (e) {
-  fail(EXIT.USAGE, `error: --props is not valid JSON: ${e?.message ?? e}\n${USAGE}`);
-}
-if (props === null || typeof props !== "object" || Array.isArray(props))
-  fail(EXIT.USAGE, `error: --props must be a JSON object, e.g. '{"bold":true}'\n${USAGE}`);
+if (op !== "bullet") {
+  try {
+    props = JSON.parse(propsRaw);
+  } catch (e) {
+    fail(EXIT.USAGE, `error: --props is not valid JSON: ${e?.message ?? e}\n${USAGE}`);
+  }
+  if (props === null || typeof props !== "object" || Array.isArray(props))
+    fail(EXIT.USAGE, `error: --props must be a JSON object, e.g. '{"bold":true}'\n${USAGE}`);
 
-// Then check the KEYS and VALUES against the verified table. This is the only
-// thing standing between a typo and a confident "verified:true" on a document
-// that was never changed — the engine reports success either way.
-{
+  // Then check the KEYS and VALUES against the verified table. This is the only
+  // thing standing between a typo and a confident "verified:true" on a document
+  // that was never changed — the engine reports success either way.
   const { errors, warnings } = validateProps(op, props, {
     allowUnknown: flag("--allow-unknown-props"),
   });
@@ -148,6 +193,11 @@ if (props === null || typeof props !== "object" || Array.isArray(props))
       errors.map((e) => `error: ${e}`).join("\n") + `\n${USAGE}`,
     );
   }
+} else if (propsRaw !== undefined) {
+  fail(
+    EXIT.USAGE,
+    `error: --op bullet does not take --props; use --char '<glyph>' and --level N\n${USAGE}`,
+  );
 }
 
 // Refuse a memo-bearing input (the engine drops memos on save) unless the
@@ -164,6 +214,197 @@ try {
   doc = await loadDocument(input);
 } catch (e) {
   fail(EXIT.LOAD, `error: could not load ${input}: ${e?.message ?? e}`);
+}
+
+// --- --op bullet -------------------------------------------------------------
+//
+// Self-contained: bullets act on a SET of paragraphs and have two mechanisms,
+// so they do not fit the single-address char/para flow above. Everything below
+// this branch is the char/para path, untouched.
+if (op === "bullet") {
+  const secCount = doc.getSectionCount();
+  if (section >= secCount) {
+    fail(EXIT.NOT_FOUND, `error: section ${section} out of range (document has ${secCount})`);
+  }
+  const paraCount = doc.getParagraphCount(section);
+  const oob = bulletTargets.filter((p) => p >= paraCount);
+  if (oob.length) {
+    fail(
+      EXIT.NOT_FOUND,
+      `error: paragraph ${oob.join(", ")} out of range for section ${section} (valid 0..${paraCount - 1})`,
+    );
+  }
+
+  // Which mechanism? `auto` follows the document. A file that already uses
+  // HWP bullets gets HWP bullets; everything else gets the glyph convention,
+  // which is what ~2x more real 개조식 paragraphs actually use.
+  const detected = detectBulletMode(doc);
+  const mode = bulletMode === undefined || bulletMode === "auto" ? detected.mode : bulletMode;
+  const level = bulletLevel === undefined ? 0 : bulletLevel;
+
+  const changes = [];
+  let bulletId = null;
+
+  if (!bulletRemove && mode === "hwp") {
+    // RAW STRING, not JSON — see lib/bullets.mjs. And the definition only
+    // survives the save if a paragraph references it, so this is followed by
+    // the applyParaFormat below for every target.
+    try {
+      bulletId = JSON.parse(doc.ensureDefaultBullet(bulletGlyph));
+    } catch (e) {
+      fail(EXIT.CORRUPTION, `error: could not define bullet ${JSON.stringify(bulletGlyph)}: ${e?.message ?? e}`);
+    }
+    if (!Number.isInteger(bulletId)) {
+      fail(EXIT.CORRUPTION, `error: the engine did not return a bullet id (got ${JSON.stringify(bulletId)})`);
+    }
+  }
+
+  for (const p of bulletTargets) {
+    const len = doc.getParagraphLength(section, p);
+    const text = len > 0 ? doc.getTextRange(section, p, 0, len) : "";
+    const existing = parseMarker(text);
+
+    // REMOVAL CLEARS BOTH MECHANISMS, whatever --mode says. A document can
+    // carry a headType bullet on one paragraph and a typed glyph on the next,
+    // and "remove the bullet" has only one sensible meaning. Clearing only the
+    // selected mechanism would leave a visible □ behind while reporting
+    // success, because "headType is no longer Bullet" is trivially true of a
+    // paragraph that never had one.
+    if (bulletRemove) {
+      const pp = JSON.parse(doc.getParaPropertiesAt(section, p));
+      const hadHwp = pp.headType === "Bullet";
+      const hadText = existing !== null;
+      if (hadText) doc.deleteText(section, p, 0, existing.prefixLength);
+      if (hadHwp) {
+        const r = JSON.parse(
+          doc.applyParaFormat(
+            section,
+            p,
+            JSON.stringify({ headType: "None", numberingId: 0, paraLevel: 0 }),
+          ),
+        );
+        if (!r || r.ok !== true) {
+          fail(EXIT.CORRUPTION, `error: could not clear the bullet on paragraph ${p}: ${JSON.stringify(r)}`);
+        }
+      }
+      changes.push({
+        paragraph: p,
+        removedText: hadText ? existing.glyph : null,
+        removedHwpBullet: hadHwp,
+        hadBullet: hadText || hadHwp,
+      });
+      continue;
+    }
+
+    if (mode === "text") {
+      // Replace an existing marker rather than stacking a second one in front
+      // of it — "□ □ 추진 배경" is the obvious bug here.
+      const drop = existing ? existing.prefixLength : 0;
+      if (drop > 0) doc.deleteText(section, p, 0, drop);
+      const prefix = textPrefix(bulletGlyph, level);
+      doc.insertText(section, p, 0, prefix);
+      changes.push({ paragraph: p, mode, prefix, replaced: existing ? existing.glyph : null });
+      continue;
+    }
+
+    // mode === "hwp"
+    const props = { headType: "Bullet", numberingId: bulletId, paraLevel: level };
+    let r;
+    try {
+      r = JSON.parse(doc.applyParaFormat(section, p, JSON.stringify(props)));
+    } catch (e) {
+      fail(EXIT.CORRUPTION, `error: bullet apply failed at paragraph ${p}: ${e?.message ?? e}`);
+    }
+    if (!r || r.ok !== true) {
+      fail(EXIT.CORRUPTION, `error: engine reported failure for paragraph ${p}: ${JSON.stringify(r)}`);
+    }
+    changes.push({ paragraph: p, mode, bulletId, level });
+  }
+
+  let bResult;
+  try {
+    bResult = await exportVerify(doc, output, {});
+  } catch (e) {
+    fail(EXIT.CORRUPTION, `error: export/verify failed: ${e?.message ?? e}`);
+  }
+  if (!bResult.verified) {
+    process.stderr.write(JSON.stringify(bResult) + "\n");
+    fail(EXIT.CORRUPTION, `error: round-trip verification failed — ${output} did not reload cleanly.`);
+  }
+
+  // Confirm from the SAVED file. Neither mechanism is provable in memory: a
+  // bullet definition nobody references is pruned on save, and a text prefix
+  // is only real if the reloaded paragraph starts with it.
+  const back = await loadDocument(bResult.outputPath);
+  const confirmed = [];
+  for (const c of changes) {
+    const len = back.getParagraphLength(section, c.paragraph);
+    const text = len > 0 ? back.getTextRange(section, c.paragraph, 0, Math.min(len, 60)) : "";
+    let ok;
+    if (bulletRemove) {
+      // Both mechanisms, for the reason given at the removal branch above.
+      const pp = JSON.parse(back.getParaPropertiesAt(section, c.paragraph));
+      ok = parseMarker(text) === null && pp.headType !== "Bullet";
+    } else if (mode === "text") {
+      ok = text.startsWith(c.prefix);
+    } else {
+      const pp = JSON.parse(back.getParaPropertiesAt(section, c.paragraph));
+      ok = pp.headType === "Bullet" && pp.numberingId === bulletId;
+    }
+    confirmed.push({ ...c, confirmed: ok });
+  }
+  const failed = confirmed.filter((c) => !c.confirmed);
+  if (failed.length) {
+    process.stdout.write(JSON.stringify({ ...bResult, changes: confirmed }) + "\n");
+    fail(
+      EXIT.CORRUPTION,
+      `error: the bullet did NOT take on disk for paragraph ` +
+        `${failed.map((c) => c.paragraph).join(", ")}. Do not deliver ${output}.`,
+    );
+  }
+  // "Removed" must not be reported for a paragraph that had nothing to remove.
+  // The confirmation above is satisfied by a paragraph that was never bulleted,
+  // so without this the command would answer success for a mis-typed range.
+  if (bulletRemove) {
+    const untouched = confirmed.filter((c) => !c.hadBullet).map((c) => c.paragraph);
+    if (untouched.length === confirmed.length) {
+      process.stderr.write(
+        `WARNING: none of the selected paragraphs had a bullet — nothing was removed. ` +
+          `Check --paragraphs (${bulletTargets.join(", ")}).\n`,
+      );
+    } else if (untouched.length) {
+      process.stderr.write(`WARNING: paragraph ${untouched.join(", ")} had no bullet; left unchanged.\n`);
+    }
+  }
+  if (mode === "hwp" && !bulletRemove) {
+    const list = JSON.parse(back.getBulletList());
+    const entry = Array.isArray(list) ? list.find((b) => b.id === bulletId) : null;
+    if (!entry || entry.char !== bulletGlyph) {
+      fail(
+        EXIT.CORRUPTION,
+        `error: the saved bullet is ${JSON.stringify(entry?.char)}, not ` +
+          `${JSON.stringify(bulletGlyph)} — the definition did not survive the save.`,
+      );
+    }
+  }
+
+  process.stdout.write(
+    JSON.stringify({
+      ok: true,
+      op: "bullet",
+      section,
+      mode,
+      modeSource: bulletMode === undefined || bulletMode === "auto" ? "auto" : "explicit",
+      detected,
+      ...(bulletRemove ? { removed: true } : { char: bulletGlyph, level }),
+      ...(mode === "hwp" && !bulletRemove ? { bulletId } : {}),
+      changes: confirmed,
+      verified: true,
+      bytesWritten: bResult.bytesWritten,
+      outputPath: bResult.outputPath,
+    }) + "\n",
+  );
+  process.exit(EXIT.OK);
 }
 
 // Snapshot the shape BEFORE the edit. Comparing it against the reloaded shape
