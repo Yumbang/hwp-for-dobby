@@ -62,7 +62,9 @@ Scripts are ESM (Node 18+), print one-line JSON or extracted content on stdout, 
 - `.docx` → docx skill · `.xlsx` → xlsx · `.pptx` → pptx · `.pdf` → pdf · `.odt` → not supported.
 - **Producing a Hancom-readable `.hwpx`** — the engine can't; we only emit `.hwp`. Say so honestly.
 - **Reading table data off flattened text** — never. Use `extract_tables.mjs` (address/merge-aware). `read.mjs` strict mode refuses to flatten tables for exactly this reason.
-- Shape/textbox/chart insertion and style systems — not supported on this engine build (documented gap).
+- Shape/textbox/chart insertion — not supported on this engine build (documented gap).
+- **Defining** a style (create/update/delete) — the engine reports success and does nothing, and `deleteStyle` also reverts paragraphs that used the style. Reading the style list and **applying** an existing style do work.
+- **Setting a font by name** — `applyCharFormat` cannot. Applying a style the document already carries changes the font; nothing else does.
 
 ## Setup
 

@@ -28,6 +28,29 @@
 // documentation listed fontFamily as supported. It is called out by name below
 // so the error explains the situation instead of just saying "unknown key".
 //
+// 2026-08-27 CORRECTION. The INEFFECTIVE list below was wrong in six of seven
+// entries, and the two mistakes had opposite shapes:
+//
+//   (a) WRONG KEY NAME, not an unsupported feature. charSpacing / charWidth /
+//       bgColor / shadow / outline are not keys the engine has at all. The
+//       real names are `spacings` / `ratios` / `shadeColor` / `shadowType` /
+//       `outlineType`, and every one of those DOES move the value through an
+//       export→reload. They are named in the redirect table below so the error
+//       points at the working key instead of calling the feature unsupported.
+//       They are deliberately NOT in the tables yet — adding them is an
+//       expansion, and this pass is a correction.
+//
+//   (b) FLATLY MISJUDGED. `lineSpacingType` and `underlineType` work. They were
+//       tested with values the engine does not accept ("Solid", "AtLeast"),
+//       which it ignores silently, and the no-op was read as "not supported".
+//       Both are now in the tables with their real enums. This mattered:
+//       format.mjs was refusing two working properties with a USAGE error.
+//
+// Only the `fontFamily` entry was correct — and even that is narrower than it
+// read. applyCharFormat cannot set a font, but `applyStyle` carries the font of
+// the style it applies, so a font CAN be changed by adopting a style the
+// document already has. See spec rule 60.
+//
 // ESCAPE HATCH. The engine is a moving third-party target and a later version
 // will support keys this table does not know. `--allow-unknown-props` passes
 // anything through with a warning, so this list can never become a ceiling.
@@ -44,6 +67,13 @@ export const CHAR_PROPS = Object.freeze({
   bold: BOOL,
   italic: BOOL,
   underline: BOOL,
+  // Verified: "Bottom" and "Top" persist; "None" clears. Anything else —
+  // "Solid", "Single", "Center" — is silently ignored and reads back "None",
+  // which is how this key was previously mistaken for unsupported.
+  underlineType: {
+    type: "enum",
+    values: ["None", "Bottom", "Top"],
+  },
   strikethrough: BOOL,
   superscript: BOOL,
   subscript: BOOL,
@@ -58,7 +88,19 @@ export const PARA_PROPS = Object.freeze({
     type: "enum",
     values: ["left", "center", "right", "justify", "distribute"],
   },
-  lineSpacing: INT("percent — 200 is double spacing"),
+  // THE UNIT DEPENDS ON lineSpacingType, which is why they sit together.
+  //   Percent (the default, and the only value seen in 6,918 real paragraphs):
+  //     a percentage — 200 is double spacing.
+  //   Fixed: HWPUNIT — 2400 reads back as 16pt.
+  // Sending lineSpacing alone keeps whatever type the paragraph already has.
+  lineSpacing: INT("percent under lineSpacingType 'Percent' (default), HWPUNIT under 'Fixed'"),
+  // Verified: "Fixed" and "Percent" persist. "AtLeast" and "BetweenLines" are
+  // accepted and silently fall back to "Percent" — testing with those is how
+  // this key was previously mistaken for unsupported.
+  lineSpacingType: {
+    type: "enum",
+    values: ["Percent", "Fixed"],
+  },
   marginLeft: INT("HWPUNIT, 1/7200 inch"),
   marginRight: INT("HWPUNIT, 1/7200 inch"),
   indent: INT("HWPUNIT — negative for a hanging indent"),
@@ -72,17 +114,35 @@ export const PARA_PROPS = Object.freeze({
 
 // Keys the engine accepts and ignores. Naming them turns a baffling silent
 // no-op into an explanation.
+//
+// Kept deliberately SHORT. A key belongs here only if the engine really does
+// nothing with it under any spelling — see the 2026-08-27 correction above for
+// the six entries that were removed because the feature works under a
+// different name or a different value vocabulary.
 const INEFFECTIVE = Object.freeze({
   fontFamily:
-    "the engine accepts it but does not apply it — a font must be registered " +
-    "through its font-id API first, which applyCharFormat does not do",
-  lineSpacingType: "the engine accepts it but does not apply it; lineSpacing alone works",
-  charSpacing: "not applied by applyCharFormat on this engine version",
-  charWidth: "not applied by applyCharFormat on this engine version",
-  bgColor: "not applied by applyCharFormat on this engine version",
-  underlineType: "not applied by applyCharFormat on this engine version; `underline` works",
-  shadow: "not applied by applyCharFormat on this engine version",
-  outline: "not applied by applyCharFormat on this engine version",
+    "applyCharFormat cannot set a font — registering it with the font-id API " +
+    "first does not help, and neither does createStyle. A font CAN be changed " +
+    "by applying a style the document already carries (`applyStyle`), which is " +
+    "the only working route",
+  fontFamilies: "same as fontFamily — applyCharFormat does not set fonts",
+  charShapeId: "read-only in practice; setCharShapeId is a no-op at every id",
+  paraShapeId: "not settable through applyParaFormat; use setParaShapeId",
+});
+
+// Keys that name a real FEATURE under the wrong NAME. The feature works; the
+// spelling does not. Redirecting is far more useful than "unknown key", and
+// these were all in INEFFECTIVE until 2026-08-27 mislabelled as unsupported.
+//
+// The targets are not in CHAR_PROPS/PARA_PROPS yet — documenting them is an
+// expansion, and this table is the correction. --allow-unknown-props sends
+// them through in the meantime, which is why the message says so.
+const RENAMED = Object.freeze({
+  charSpacing: ["spacings", "an array of 7 per-language values (한글/라틴/한자/일어/기타/기호/사용자)"],
+  charWidth: ["ratios", "an array of 7 per-language values"],
+  bgColor: ["shadeColor", 'a "#RRGGBB" color'],
+  shadow: ["shadowType", "an integer (0 = none)"],
+  outline: ["outlineType", "an integer (0 = none)"],
 });
 
 export function propsFor(op) {
@@ -167,6 +227,15 @@ export function validateProps(op, props, { allowUnknown = false } = {}) {
           `"${key}" has NO EFFECT on engine 0.7.19 — ${INEFFECTIVE[key]}. ` +
             `The engine would still report success. Remove it, or pass ` +
             `--allow-unknown-props to send it anyway.`,
+        );
+        continue;
+      }
+      if (Object.prototype.hasOwnProperty.call(RENAMED, key)) {
+        const [real, shape] = RENAMED[key];
+        errors.push(
+          `"${key}" is not a key this engine has — the working key is ` +
+            `"${real}" (${shape}). It is not validated here yet, so send it ` +
+            `with --allow-unknown-props and check the result.`,
         );
         continue;
       }

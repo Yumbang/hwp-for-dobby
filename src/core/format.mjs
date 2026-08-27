@@ -13,19 +13,22 @@
 //
 // PROPS — validated against a verified table before anything is applied.
 //   char: bold, italic, underline, strikethrough, superscript, subscript,
-//         emboss, engrave (boolean); fontSize (integer HWPUNIT, 1400 = 14pt);
-//         textColor ("#RRGGBB").
+//         emboss, engrave (boolean); underlineType ("None"|"Bottom"|"Top");
+//         fontSize (integer HWPUNIT, 1400 = 14pt); textColor ("#RRGGBB").
 //   para: alignment ("left"|"center"|"right"|"justify"|"distribute");
-//         lineSpacing (integer percent); marginLeft / marginRight / indent /
-//         spacingBefore / spacingAfter (integer HWPUNIT, negative allowed for a
-//         hanging indent); keepWithNext, pageBreakBefore, widowOrphan,
-//         keepLines (boolean).
+//         lineSpacingType ("Percent"|"Fixed"); lineSpacing (integer — PERCENT
+//         under "Percent", HWPUNIT under "Fixed"; the unit follows the type);
+//         marginLeft / marginRight / indent / spacingBefore / spacingAfter
+//         (integer HWPUNIT, negative allowed for a hanging indent);
+//         keepWithNext, pageBreakBefore, widowOrphan, keepLines (boolean).
 //   Every key in that list was confirmed by applying it alone and reading the
 //   value back after an export→reload. See lib/format_props.mjs.
 //
 //   WHY THE TABLE EXISTS: the engine is completely permissive. A typo'd key
 //   ({"boldd":true}), the right key in the wrong case ({"BOLD":true}), a real
-//   key it does not act on ({"fontFamily":"굴림"}), an invalid enum value
+//   key it does not act on ({"fontFamily":"굴림"} — only applyStyle can change
+//   a font), a key that is the WRONG NAME for a working feature
+//   ({"bgColor":...}, whose real name is shadeColor), an invalid enum value
 //   ({"alignment":"banana"}) and a wrong-typed value ({"bold":"yes"}) ALL return
 //   {"ok":true} and change nothing. Before this table, format.mjs answered
 //   `ok:true, verified:true` for a document it had not altered at all — the
