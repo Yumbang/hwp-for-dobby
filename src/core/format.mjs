@@ -69,6 +69,7 @@ import {
   textPrefix,
 } from "../lib/bullets.mjs";
 import { classifyEffect, validateProps } from "../lib/format_props.mjs";
+import { buildPalette } from "../lib/palette.mjs";
 import {
   detectIndentScheme,
   hangingIndentFor,
@@ -85,7 +86,8 @@ const USAGE =
   "       format.mjs <input> --op bullet --section N --paragraphs 6-9 " +
   "[--char '□'] [--level N] [--mode auto|hwp|text] [--remove] --output <out.hwp>\n" +
   "       format.mjs <input> --op indent --section N --paragraphs 6-9 --level N " +
-  "[--scheme auto|space|margin] [--no-hanging] --output <out.hwp>";
+  "[--scheme auto|space|margin] [--no-hanging] --output <out.hwp>\n" +
+  "       format.mjs <input> --op list [--section N] [--format text|json]   (read-only, no --output)";
 
 // Option parsing in the style of the sibling core scripts (replace.mjs): one
 // positional input plus named flags. Kept small.
@@ -126,12 +128,18 @@ if (flag("-h") || flag("--help")) {
 }
 
 // --- argument validation -----------------------------------------------------
-if (!input || input.startsWith("-") || !output) fail(EXIT.USAGE, USAGE);
-if (op !== "char" && op !== "para" && op !== "bullet" && op !== "indent")
-  fail(EXIT.USAGE, `error: --op must be 'char', 'para', 'bullet' or 'indent'\n${USAGE}`);
-if (!Number.isInteger(section) || section < 0)
+if (!input || input.startsWith("-")) fail(EXIT.USAGE, USAGE);
+if (op !== "list" && !output) fail(EXIT.USAGE, USAGE);
+if (op === "list" && output) {
+  fail(EXIT.USAGE, `error: --op list is read-only and writes no document; drop --output\n${USAGE}`);
+}
+if (op !== "char" && op !== "para" && op !== "bullet" && op !== "indent" && op !== "list")
+  fail(EXIT.USAGE, `error: --op must be 'char', 'para', 'bullet', 'indent' or 'list'\n${USAGE}`);
+if (op !== "list" && (!Number.isInteger(section) || section < 0))
   fail(EXIT.USAGE, `error: --section must be a non-negative integer\n${USAGE}`);
-if (op !== "bullet" && op !== "indent") {
+if (op === "list" && section !== undefined && (!Number.isInteger(section) || section < 0))
+  fail(EXIT.USAGE, `error: --section must be a non-negative integer\n${USAGE}`);
+if (op !== "bullet" && op !== "indent" && op !== "list") {
   if (!Number.isInteger(paragraph) || paragraph < 0)
     fail(EXIT.USAGE, `error: --paragraph must be a non-negative integer\n${USAGE}`);
   if (propsRaw === undefined)
@@ -200,7 +208,7 @@ if (op === "char") {
 // --op bullet and --op indent carry no --props: their vocabulary is
 // --char/--level/--mode and --level/--scheme respectively.
 let props;
-if (op !== "bullet" && op !== "indent") {
+if (op !== "bullet" && op !== "indent" && op !== "list") {
   try {
     props = JSON.parse(propsRaw);
   } catch (e) {
@@ -231,11 +239,11 @@ if (op !== "bullet" && op !== "indent") {
 
 // Refuse a memo-bearing input (the engine drops memos on save) unless the
 // caller passed --allow-memo-loss. No-op on memo-free inputs.
-assertMemoSafe(input, process.argv);
+if (op !== "list") assertMemoSafe(input, process.argv);
 // Same contract for tracked changes (변경 내용 추적): the engine does not model
 // them either, so an edit destroys every recorded change AND the original text
 // each deletion still holds. Override: --allow-trackchange-loss.
-assertTrackChangeSafe(input, process.argv);
+if (op !== "list") assertTrackChangeSafe(input, process.argv);
 
 // --- load --------------------------------------------------------------------
 let doc;
@@ -463,6 +471,101 @@ if (op === "bullet") {
       outputPath: bResult.outputPath,
     }) + "\n",
   );
+  process.exit(EXIT.OK);
+}
+
+// --- --op list ---------------------------------------------------------------
+//
+// Read-only. Reports the shapes the document uses, described in the same keys
+// --props accepts, plus evidence of where they disagree with each other.
+//
+// It does NOT decide which shape is correct. A draft whose level-2 items are
+// ○, -, ◦ and * has four shapes and three mistakes, and a report that called
+// all four "the document's style" would turn the mess into a standard. So the
+// observations carry their reasoning and stop there — see lib/palette.mjs.
+if (op === "list") {
+  const listFormat = arg("--format") ?? "text";
+  if (listFormat !== "text" && listFormat !== "json") {
+    fail(EXIT.USAGE, `error: --format must be text|json (got ${JSON.stringify(listFormat)})\n${USAGE}`);
+  }
+  const secCount = doc.getSectionCount();
+  if (section !== undefined && section >= secCount) {
+    fail(EXIT.NOT_FOUND, `error: section ${section} out of range (document has ${secCount})`);
+  }
+  const pal = buildPalette(doc, { section: section === undefined ? null : section });
+
+  if (listFormat === "json") {
+    process.stdout.write(
+      JSON.stringify(
+        {
+          input,
+          sectionCount: secCount,
+          paragraphCount: pal.paragraphs.length,
+          shapes: pal.shapes,
+          markers: pal.markers,
+          observations: pal.observations,
+        },
+        null,
+        2,
+      ) + "\n",
+    );
+    process.exit(EXIT.OK);
+  }
+
+  const L = [];
+  const described = (sh) => {
+    const bits = [];
+    if (sh.marker) bits.push(`"${sh.marker.glyph}" +${sh.marker.indentChars}sp`);
+    for (const [k, v] of Object.entries(sh.charProps)) if (v !== false) bits.push(`${k}=${JSON.stringify(v)}`);
+    for (const [k, v] of Object.entries(sh.paraProps)) if (v !== 0) bits.push(`${k}=${JSON.stringify(v)}`);
+    return bits.join(" · ") || "(document defaults)";
+  };
+  L.push(`shapes in ${input} — ${pal.shapes.length} distinct, ${pal.paragraphs.length} paragraphs`);
+  L.push("");
+  for (const sh of pal.shapes) {
+    const where = sh.paragraphs.slice(0, 6).map((x) => x.paragraph).join(",");
+    const more = sh.paragraphs.length > 6 ? `,+${sh.paragraphs.length - 6}` : "";
+    L.push(`  ${sh.id.padEnd(4)} ${String(sh.count).padStart(3)}x  ${described(sh)}`);
+    L.push(`       paragraphs ${where}${more}`);
+    const ro = sh.readOnly ?? {};
+    if (ro.fontFamily) {
+      L.push(
+        `       font ${ro.fontFamily}${ro.mixedLanguageFonts ? " (+ different fonts in other language slots)" : ""}` +
+          `  — READ-ONLY, applyCharFormat cannot set a font`,
+      );
+    }
+    if (ro.style && ro.style !== "바탕글") L.push(`       style ${ro.style}`);
+  }
+  if (pal.markers.length) {
+    L.push("");
+    L.push("marker glyphs (fact, not judgement):");
+    for (const m of pal.markers) {
+      L.push(
+        `  ${m.glyph}  ${String(m.count).padStart(3)}x  at depth ` +
+          m.depths.map((d) => `${d.indentChars}sp×${d.count}`).join(", "),
+      );
+    }
+  }
+  if (pal.observations.length) {
+    L.push("");
+    L.push(`observations (${pal.observations.length}) — evidence, NOT verdicts:`);
+    for (const o of pal.observations) {
+      const head =
+        o.kind === "glyph-at-mixed-depths"
+          ? `"${o.glyph}" used at ${o.depths.length} depths`
+          : o.kind === "near-duplicate"
+            ? `near-duplicate ${o.shape} ~ ${o.nearest} (differs in ${o.differsIn.join(", ")})`
+            : `singleton ${o.shape} at paragraph ${o.paragraph.paragraph}`;
+      L.push(`  • ${head}`);
+      L.push(`    ${o.why}`);
+    }
+    L.push("");
+    L.push(
+      "Deciding whether a deviation is a mistake or a deliberate choice is yours.\n" +
+        "Nothing here was changed, and nothing normalises automatically.",
+    );
+  }
+  process.stdout.write(L.join("\n") + "\n");
   process.exit(EXIT.OK);
 }
 

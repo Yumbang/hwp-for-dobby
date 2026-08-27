@@ -27,6 +27,18 @@ So: for edits that move text or geometry — indents, bullets, images, font size
 - **`edit_text.mjs --op insert-paragraph`** — `--paragraph N` inserts the new empty paragraph AT index N, pushing the rest down. Its upper bound is inclusive: passing the current paragraph COUNT appends at the end, which is how you add a line after the last one. Every other op's `--paragraph` is bounded by `count - 1`.
 - **`create.mjs`** — replays a JSON plan (`insert_text`, `insert_paragraph`, `create_table`, `insert_text_in_cell`) against a fresh blank document.
 
+### `format.mjs --op list` — what the document already does
+
+Read-only; refuses `--output`. Reports the distinct shapes the document uses, each described in the same keys `--props` accepts, so what you read goes straight back in. The `P1` labels are local to one report and are never stored in the document — this is deduplication of a report, not a format.
+
+Why a palette rather than a per-paragraph dump: across 74 real documents the most common paragraph shape covers a median of only **42%**, so "baseline plus exceptions" would list most of the document as an exception. The *vocabulary* is small though — a median of 9 paragraph shapes for a 57-paragraph document — so describing the shapes once and referencing them is what fits.
+
+**It describes; it does not prescribe.** A draft whose level-2 items drifted across ○, -, ◦ and * has four shapes and three mistakes. `shapes` and `markers` state the facts; `observations` gives evidence of inconsistency **with the reasoning**, so you can overrule it. Nothing is normalised automatically — deciding whether a deviation is a slip or a deliberate choice is yours, and a tool that quietly "corrected" intentional variation would be the silent-success failure this skill exists to avoid.
+
+Observations are deliberately conservative. A glyph used at two leading-space depths is flagged, because one glyph cannot mark two levels whatever the intended outline. A shape one property away from a much more common one is flagged as *possibly* a slip. But **different glyphs sharing a depth is not flagged**: half of all real marker paragraphs carry no indent at all, so at depth 0 that test puts a legitimate top-level `□` beside level-2 items that merely lost their indent and then calls `□` the majority — which would push the strays up a level instead of fixing them. The marker inventory states the same facts without pointing anywhere.
+
+Fonts are reported under `readOnly`, never among the writable props, because `applyCharFormat` cannot set one.
+
 ### `format.mjs --op char` / `--op para` — the `--props` vocabulary
 
 `--op char` needs an explicit `--start`/`--end`; there is no whole-paragraph
