@@ -1,0 +1,212 @@
+# 서식(Formatting) 기능 현황 조사 — 2026-08-27
+
+`feat/formatting` 브랜치 준비 조사. 엔진 0.7.19에 대해 **전부 경험적으로 측정**했다.
+측정 방법은 이미지 브랜치와 동일하다: 적용 → `exportHwp` → 디스크 기록 → **재로딩 후
+디스크에서 읽은 값**으로 판정한다. 반환값이나 메모리 상태는 신뢰하지 않는다(이미지
+브랜치에서 같은 실수로 버그 4건이 났다).
+
+재현: `samples/fixture-headings.hwp` 섹션 0, **문단 6**(len=16), 문자 범위 0..10.
+표 관련은 `samples/fixture-table.hwp` 문단 0 / 컨트롤 2.
+
+---
+
+## 1. 요약
+
+| | 읽기 | 편집 |
+|---|---|---|
+| 문자 서식 | **노출 0** (게터는 39키 보유) | 10키 노출 / **33키 실동작** |
+| 문단 서식 | **노출 0** (게터는 40키 보유) | 11키 노출 / **33키 실동작** |
+| 스타일 | **노출 0** (22개 스타일 목록 보유) | **노출 0** / `applyStyle` 실동작 |
+| 번호매기기·불릿 | **노출 0** | **노출 0** / `createNumbering` 실동작 |
+| 표 셀 서식 | **노출 0** | **노출 0** / 3개 API 실동작 |
+| 용지·구역 레이아웃 | `info.mjs`가 **읽기 전용으로 노출** | **노출 0** / `setPageDef` 실동작 |
+
+**이미지 때와 같은 모양의 문제다.** 읽기가 서식을 전혀 보여주지 않으므로 에이전트는
+문서가 현재 어떤 서식인지 모르는 채로 편집한다. 이미지에서는 그 결과가 레이아웃 파괴였다.
+
+---
+
+## 2. 읽기 — 지금 무엇이 나오는가
+
+**`read.mjs` / `sections.mjs` / `extract_tables.mjs`: 서식 정보 0.** 텍스트만 나온다.
+`grep -n 'CharProperties\|ParaProperties\|getStyleAt' src/core/read.mjs` → 없음.
+
+**`info.mjs`만 예외적으로 레이아웃을 노출한다** — 이미 쓸 만하다:
+
+```
+pages[]: width, height, marginLeft/Right/Top/Bottom, marginHeader/Footer,
+         pageBorderLeft/Right/Top/Bottom, columns[{x,width}]
+info   : fontsUsed[], fallbackFont, sectionCount, pageCount
+```
+
+### 엔진이 주지만 우리가 안 쓰는 게터
+
+| API | 반환 | 비고 |
+|---|---|---|
+| `getCharPropertiesAt(s,p,off)` | **39키** | 아래 §3 표 |
+| `getParaPropertiesAt(s,p)` | **40키** | 아래 §4 표 |
+| `getStyleAt(s,p)` | `{id,name}` | 문단의 스타일 |
+| `getStyleList()` | 22개 | `바탕글/본문/개요 1..7/…` + `paraShapeId`,`charShapeId` |
+| `getStyleDetail(id)` | `{charProps,paraProps}` | 스타일 정의 전체 |
+| `getNumberingList()` / `getBulletList()` | 배열 | `levelFormats[7]`, `startNumber` |
+| `getSectionDef(s)` / `getColumnDef(s)` / `getPageBorderFill(s)` | 객체 | 구역·단·쪽 테두리 |
+| `getCellProperties` / `getCellOwnProperties` | 객체 | 셀 여백·정렬·테두리·`isHeader` |
+| `getCellCharPropertiesAt` / `getCellParaPropertiesAt` / `getCellStyleAt` | 본문과 동형 | 셀 안 서식 |
+| `getTableProperties(s,p,c)` | 객체 | 표 여백·`repeatHeader`·테두리 |
+
+---
+
+## 3. 문자 서식 편집 — `applyCharFormat`
+
+**33키 실동작.** `format.mjs`가 노출하는 것은 10키.
+
+**동작(현재 노출 10):** `bold` `italic` `underline` `strikethrough` `superscript`
+`subscript` `emboss` `engrave` `fontSize` `textColor`
+
+**동작하지만 미노출 (13):** `underlineColor` `strikeColor` `shadeColor`(글자 배경)
+`shadowType` `shadowColor` `shadowOffsetX` `shadowOffsetY` `outlineType`
+`emphasisDot`(강조점) `underlineShape` `strikeShape` `kerning` `fillType`
+
+**동작하지만 미노출 — 배열/객체형 (9):** `spacings[7]`(자간) `ratios[7]`(장평)
+`relativeSizes[7]` `charOffsets[7]` `borderLeft/Right/Top/Bottom` `underlineType`
+
+**동작 안 함 (6):** `fontFamily` `fontFamilies` `charShapeId` `borderFillId`(파생값)
+`patternColor` `patternType`
+
+### 우리 문서가 틀렸다 — `lib/format_props.mjs`의 `INEFFECTIVE` 표
+
+이 표는 대부분 **"미지원"이 아니라 "키 이름을 잘못 적은 것"**이었다. 실제 이름으로는 동작한다:
+
+| 표에 적힌 이름 | 판정 | 실제 이름 | 실측 |
+|---|---|---|---|
+| `charSpacing` | 이름 오류 | **`spacings[7]`** | `[20,…]` → `[20,…]` ✅ |
+| `charWidth` | 이름 오류 | **`ratios[7]`** | `[150,…]` → `[150,…]` ✅ |
+| `bgColor` | 이름 오류 | **`shadeColor`** | `#123456` ✅ |
+| `shadow` | 이름 오류 | **`shadowType`** | `0→1` ✅ |
+| `outline` | 이름 오류 | **`outlineType`** | `0→1` ✅ |
+| `underlineType` | **판정 오류** | 그대로 동작 | `"Bottom"`/`"Top"` ✅ (`"Solid"`/`"Single"`은 조용히 `None`) |
+| `lineSpacingType` | **판정 오류** | 그대로 동작 | `"Fixed"`/`"Percent"` ✅ |
+| `fontFamily` | **정확함** | — | 어떤 경로로도 안 됨 (§6) |
+
+→ 현재 `format.mjs`는 **정상 동작하는 `lineSpacingType`·`underlineType`을 exit 2로 거부**한다.
+
+---
+
+## 4. 문단 서식 편집 — `applyParaFormat`
+
+**33키 실동작.** `format.mjs`가 노출하는 것은 11키.
+
+**동작(현재 노출 11):** `alignment` `lineSpacing` `marginLeft` `marginRight` `indent`
+`spacingBefore` `spacingAfter` `keepWithNext` `pageBreakBefore` `widowOrphan` `keepLines`
+
+**동작하지만 미노출 (15):** `lineSpacingType` `headType` `paraLevel` `numberingId`
+`fontLineHeight` `singleLine` `autoSpaceKrEn` `autoSpaceKrNum` `englishBreakUnit`
+`koreanBreakUnit` `tabAutoLeft` `tabAutoRight` `fillType` `borderConnect` `borderIgnoreMargin`
+
+**동작하지만 미노출 — 배열/객체형 (7):** `tabStops[]` `borderLeft/Right/Top/Bottom`
+`borderSpacing[4]` `fillColor`(단, `fillType` 동반 필수)
+
+**동작 안 함 (6):** `paraShapeId` `verticalAlign` `defaultTabSpacing` `borderFillId`
+`patternColor` `patternType`
+
+---
+
+## 5. 스타일 · 번호매기기 · 셀 · 용지
+
+전부 **실동작하지만 스킬에 전혀 노출되지 않았다.**
+
+| API | 실측 결과 |
+|---|---|
+| `applyStyle(s,p,styleId)` | ✅ `getStyleAt`→`개요 1`, `paraShapeId 0→2`, `marginLeft 0→13.3pt`. **단 문자 서식은 안 따라온다** |
+| `setParaShapeId(s,p,id)` | ✅ `paraShapeId 0→3`, `marginLeft→26.7pt`, `paraLevel→1` |
+| `createStyle(json)` | ✅ 새 id 반환, 이름 저장됨. **`charProps`는 무시된다** |
+| `createNumbering(json)` | ✅ **단 문단이 `numberingId`로 참조할 때만** 저장된다 (§6) |
+| `applyCharFormatInCell(...)` | ✅ 셀 안 `bold` 디스크 확인 |
+| `applyParaFormatInCell(...)` | ✅ 셀 안 `alignment` 디스크 확인 |
+| `setCellProperties(...)` | ✅ `borderFillId 14→29` |
+| `setTableProperties(...)` | ✅ |
+| `setPageDef(s,json)` | ✅ 용지 크기·여백·`landscape` 전부 저장 |
+| `setSectionDef(s,json)` | ✅ `hideHeader`, `columnSpacing` |
+| `setPageBorderFill(s,json)` | ✅ |
+| `insertPageBreak(s,p,off)` | ✅ `pageCount 1→2` |
+
+---
+
+## 6. 진짜 불가능한 것 · 함정
+
+### 불가능
+
+1. **글꼴(`fontFamily`) 변경 — 어떤 경로로도 안 된다.** 시도하고 전부 실패한 경로:
+   - `applyCharFormat({fontFamily})` → `ok:true`, 디스크 변화 없음
+   - `findOrCreateFontId("굴림")` (id 2 반환 = 등록은 성공) 후 재시도 → 여전히 변화 없음
+   - `createStyle({charProps:{fontFamily}})` + `applyStyle` → 스타일은 붙지만 글꼴은 그대로
+   - `setCharShapeId(s,p,st,en,id)` → id 1·2·3 전부 `ok:true`에 **완전 무동작**
+   - `applyCharFormat({fontFamilies:[7개]})` → 무동작
+   `format_props.mjs`의 `fontFamily` 항목은 정확했다. **글꼴은 못 바꾼다.**
+
+2. **`setColumnDef` — 단 개수가 안 바뀐다.** 인자 순서 3가지 + JSON 페이로드까지
+   시도했으나 `columnCount`는 항상 1. `spacing`만 바뀐다. 다단 편집은 불가.
+
+3. **`updateStyleShapes(0,1,1)` → WASM `memory access out of bounds`.**
+   throw 후 문서 객체는 살아있고 export도 되지만, **호출하면 안 된다.**
+
+4. `ensureDefaultBullet` → id 반환하지만 `getBulletList()`는 계속 `[]`.
+
+### 함정 (전부 `ok:true`를 반환한다)
+
+| 함정 | 실측 |
+|---|---|
+| **빈 문단에 문자 서식** | 문단 5(len=0)에 `(0,5,0,5)`·`(0,5,0,0)`·`(0,5,0,1)` 전부 `ok:true` + **무동작**. 서식만 먼저 잡아두려는 시도가 조용히 사라진다 |
+| **`lineSpacing` 단위가 `lineSpacingType`에 종속** | `Percent`면 퍼센트, `Fixed`면 HWPUNIT (`2400`→`16pt`). 현재 문서는 "percent"라고만 적혀 있다 |
+| **`fillColor`는 단독으로 무동작** | `{fillColor}` 단독 → 무시. `{fillColor, fillType:"solid"}` → 적용 |
+| **`shadowOffsetX/Y`는 signed byte** | `128`→`-128`, `200`→`-56`, `2000`→`-48`. 범위 검사 필요 |
+| **`tabStops` 키가 비대칭** | 넣을 때 `fillType`, 읽을 때 `fill` |
+| **`createNumbering`은 참조돼야 살아남는다** | 생성만 하면 저장 시 사라짐. `applyParaFormat({numberingId, headType:"Number"})`로 참조하면 디스크에 남음 ✅ |
+| 없는 문단 번호 | **throw** (`문단 999 범위 초과`) — 이건 조용하지 않다. exit 3으로 매핑하면 된다 |
+| 범위 초과 문자 offset | `(0,6,0,999)`는 클램프되어 정상 동작 |
+
+### SKILL.md 정정 필요
+
+65행 **"style systems — not supported on this engine build (documented gap)"** → **거짓**.
+`applyStyle`·`createStyle`·`setParaShapeId`는 동작한다.
+
+---
+
+## 7. 실문서 124건 측정 — 우선순위 근거
+
+`~/Downloads` 124건(1건 로드 실패), 문단 6,918개 표본. **집계값만 기록하며 파일명은 남기지 않는다.**
+
+| 항목 | 빈도 | 판단 |
+|---|---|---|
+| 문서당 글꼴 2종 이상 | **124/124 (100%)** | 글꼴이 가장 흔한데 **우리가 못 바꾸는 유일한 것** |
+| 본문 여백이 기본값이 아님 | **106/124 (85%)** | `setPageDef` 노출 가치 높음 |
+| **내어쓰기(음수 indent)** | **69/124 (56%)** | 개조식의 핵심. 이미 지원 중 ✅ |
+| 굵게 사용 | 81/124 (65%) | 지원 중 ✅ |
+| 본문 글자 크기 2종 이상 | 70/124 (56%) | 지원 중 ✅ |
+| `바탕글` 외 스타일 사용 | **66/124 (53%)** | `applyStyle` 노출 가치 높음 |
+| `headType` 분포 | **Bullet 442** / Number 7 / Outline 7 | 불릿 개조식이 압도적 |
+| 왼쪽 여백 > 0 | 30/124 (24%) | 지원 중 ✅ |
+| 탭 정지 사용 | 24/124 (19%) | 미노출 |
+| 색 글자 | 28/124 (23%) | 지원 중 ✅ |
+| `numberingId` > 0 | 16/124 (13%) | 미노출 |
+| 밑줄 | 12/124 (10%) | 지원 중 ✅ |
+| 다구역 | 13/124 (10%) | — |
+| **문단 테두리 / 문단 배경** | **1/124 (1%)** | 후순위 |
+| **가로 용지** | **1/124 (1%)** | 후순위 |
+
+정렬 분포: `justify` 5542 / `center` 700 / `left` 354 / `right` 322.
+`lineSpacingType`: **6,918개 문단 전부 `Percent`** — `Fixed`는 실문서에 없다.
+
+---
+
+## 8. 조사에서 나온 할 일 (구현 아님, 목록만)
+
+1. `format_props.mjs`의 `INEFFECTIVE` 표 정정 — 7개 중 6개가 틀렸다. 정상 키를 막고 있다.
+2. SKILL.md 65행 "style systems not supported" 정정.
+3. 읽기 쪽 서식 노출 — 이미지와 같은 순서(**읽기 먼저, 편집을 거기 맞춤**).
+4. 빈 문단 무동작 함정: `format.mjs`가 사전에 `getParagraphLength`로 막아야 한다.
+5. `lineSpacing` 단위 종속성 문서화.
+6. 글꼴 변경 불가를 **명시적 실패**로 만들기(현재도 exit 2로 막고는 있음).
+7. 신규 spec 규칙 59~ 및 대응 테스트.
+
+측정 스크립트는 세션 스크래치패드에 있고 커밋하지 않았다. 재현 방법은 이 문서 상단에 있다.
