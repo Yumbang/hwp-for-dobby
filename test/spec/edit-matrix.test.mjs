@@ -356,3 +356,141 @@ test("sanity: a script that fails its round-trip would NOT print verified:true (
   );
   assert.equal(existsSync(out("bad.hwpx")), false, "no .hwpx file may be written");
 });
+
+// ── --op insert --format : the inserted span, and ONLY it ──────────────────
+//
+// insertText has no formatting argument, so new text inherits the character
+// before the insertion point (spec rule 63). --format formats the inserted run
+// afterwards. The whole correctness question is the RANGE: it is measured from
+// the engine's paragraph length, not computed from text.length, because a
+// surrogate pair is two units in JS and one in the document. These tests pin
+// the boundary from the SAVED file — the character after the span must be
+// untouched, which is what a text.length range would get wrong.
+
+const HEADINGS = join(ROOT, "samples", "fixture-headings.hwp");
+const FMT_S = 0;
+const FMT_P = 6; // len 16, real text. Paragraph 5 is EMPTY — see spec rule 62.
+
+// Read (bold, textColor) for every character of the saved paragraph.
+async function charMap(path, sec, para) {
+  const doc = await loadDocument(path);
+  const len = doc.getParagraphLength(sec, para);
+  const rows = [];
+  for (let o = 0; o < len; o++) {
+    const c = JSON.parse(doc.getCharPropertiesAt(sec, para, o));
+    rows.push({ bold: c.bold, textColor: c.textColor, fontSize: c.fontSize });
+  }
+  return rows;
+}
+
+test("edit_text --format: formats exactly the inserted span, nothing adjacent", async () => {
+  const dst = out("fmt-basic.hwp");
+  const j = assertVerifiedOk(
+    "edit_text.mjs",
+    [HEADINGS, "--op", "insert", "--section", String(FMT_S), "--paragraph", String(FMT_P),
+     "--offset", "4", "--text", "삽입됨", "--format", '{"bold":true}', "--output", dst],
+    "insert with --format",
+  );
+  assert.deepEqual(j.formattedRange, { start: 4, end: 7 });
+  assert.equal(j.effect.bold, "changed");
+
+  const rows = await charMap(dst, FMT_S, FMT_P);
+  for (let o = 0; o < rows.length; o++) {
+    assert.equal(rows[o].bold, o >= 4 && o < 7, `char ${o} bold should be ${o >= 4 && o < 7}`);
+  }
+});
+
+test("edit_text --format: an astral character does not overrun the span", async () => {
+  // "테스트🙂끝" is 6 in JS and 5 in the document. A range of off+text.length
+  // would format one character that was never inserted — the character at
+  // index 9 below, which must stay unformatted.
+  const TEXT = "테스트🙂끝";
+  assert.equal(TEXT.length, 6, "precondition: JS sees 6 units");
+  const dst = out("fmt-astral.hwp");
+  const j = assertVerifiedOk(
+    "edit_text.mjs",
+    [HEADINGS, "--op", "insert", "--section", String(FMT_S), "--paragraph", String(FMT_P),
+     "--offset", "4", "--text", TEXT, "--format", '{"bold":true}', "--output", dst],
+    "insert an astral character with --format",
+  );
+  assert.deepEqual(
+    j.formattedRange,
+    { start: 4, end: 9 },
+    "the engine counts the surrogate pair as one character",
+  );
+
+  const rows = await charMap(dst, FMT_S, FMT_P);
+  for (let o = 0; o < rows.length; o++) {
+    assert.equal(rows[o].bold, o >= 4 && o < 9, `char ${o} bold should be ${o >= 4 && o < 9}`);
+  }
+  assert.equal(rows[9].bold, false, "the character AFTER the insert must not be formatted");
+});
+
+test("edit_text --format: does not inherit the anchor's formatting", async () => {
+  // The failure this feature exists for. Make the anchor bold, then insert
+  // unformatted text next to it: --format false must win over inheritance.
+  const bolded = out("fmt-anchor.hwp");
+  assertVerifiedOk(
+    "format.mjs",
+    [HEADINGS, "--op", "char", "--section", String(FMT_S), "--paragraph", String(FMT_P),
+     "--start", "0", "--end", "16", "--props", '{"bold":true}', "--output", bolded],
+    "make the whole anchor paragraph bold",
+  );
+  const dst = out("fmt-anchor-out.hwp");
+  const j = assertVerifiedOk(
+    "edit_text.mjs",
+    [bolded, "--op", "insert", "--section", String(FMT_S), "--paragraph", String(FMT_P),
+     "--offset", "8", "--text", "보통", "--format", '{"bold":false}', "--output", dst],
+    "insert unformatted text into a bold paragraph",
+  );
+  assert.deepEqual(j.formattedRange, { start: 8, end: 10 });
+  const rows = await charMap(dst, FMT_S, FMT_P);
+  assert.equal(rows[7].bold, true, "the anchor stays bold");
+  assert.equal(rows[8].bold, false, "the inserted text is NOT bold — inheritance overridden");
+  assert.equal(rows[9].bold, false);
+  assert.equal(rows[10].bold, true, "text after the insert stays bold");
+});
+
+test("edit_text --format: refused for ops where it cannot work", () => {
+  for (const [op, extra] of [["delete", ["--count", "1"]], ["insert-paragraph", []]]) {
+    const r = runScript("edit_text.mjs", [
+      HEADINGS, "--op", op, "--section", "0", "--paragraph", "6",
+      ...extra, "--format", '{"bold":true}', "--output", out(`fmt-bad-${op}.hwp`),
+    ]);
+    assert.equal(r.status, 2, `--format with --op ${op} should exit USAGE(2)`);
+    assert.match(r.stderr, /--format applies only to --op insert/);
+    assert.equal(existsSync(out(`fmt-bad-${op}.hwp`)), false, "a refused edit writes no file");
+  }
+  // The insert-paragraph message must explain the empty-paragraph trap, since
+  // "format a new paragraph" is the obvious thing to try.
+  const r = runScript("edit_text.mjs", [
+    HEADINGS, "--op", "insert-paragraph", "--section", "0", "--paragraph", "6",
+    "--format", '{"bold":true}', "--output", out("fmt-bad-2.hwp"),
+  ]);
+  assert.match(r.stderr, /EMPTY/);
+  assert.match(r.stderr, /insert-paragraph first, then insert its text/);
+});
+
+test("edit_text --format: a silently-ignored property is refused, not applied", () => {
+  // Same guarantee format.mjs gives: the engine answers ok:true for all of
+  // these and changes nothing, so they must never reach it.
+  for (const [props, expected] of [
+    ['{"boldd":true}', /did you mean "bold"/],
+    ['{"BOLD":true}', /did you mean "bold"/],
+    ['{"fontFamily":"굴림"}', /NO EFFECT/],
+    ['{"bold":"yes"}', /must be true or false/],
+    ['{"alignment":"center"}', /is a --op para property/],
+    ['{"underlineType":"Solid"}', /must be one of "None", "Bottom", "Top"/],
+    ["{}", /--props is empty/],
+    ["not json", /not valid JSON/],
+  ]) {
+    const dst = out("fmt-reject.hwp");
+    const r = runScript("edit_text.mjs", [
+      HEADINGS, "--op", "insert", "--section", "0", "--paragraph", "6",
+      "--offset", "0", "--text", "x", "--format", props, "--output", dst,
+    ]);
+    assert.equal(r.status, 2, `${props} should exit USAGE(2), got ${r.status}`);
+    assert.match(r.stderr, expected);
+    assert.equal(existsSync(dst), false, `${props}: a refused edit must write no file`);
+  }
+});
