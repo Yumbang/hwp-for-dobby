@@ -47,7 +47,7 @@ Output is **always HWP 5.0 (`.hwp`)**. Native HWPX save is rejected by Hancom Of
 | Footnote | `node src/core/footnote.mjs <in> --op insert\|delete ... --output <out.hwp>` |
 | List / fill form fields | `node src/core/fill_form.mjs <in> --list` · `--values vals.json --output <out.hwp>` · duplicate names use `name[N]` · `--dry-run` · `--rows file.jsonl --out-dir dir/` |
 | Unlock read-only doc | `node src/core/unlock.mjs <in> --output <out.hwp>` |
-| Build a doc from scratch | `node src/core/create.mjs --plan plan.json --output <out.hwp>` |
+| Build a doc · **batch-apply many edits** | `node src/core/create.mjs [--input <in.hwp>] --plan plan.json --output <out.hwp>` — with `--input` it replays a plan onto an existing document in **one** load/save instead of one per edit (measured 59ms vs 4,895ms for 12 edits). Every step is confirmed on reload; a plan that would misaddress a later step is refused |
 | **Vision-quality PNG** (code) | `node src/enhanced/render.mjs <in> --page N --output page.png` |
 | **PDF export** (code) | `node src/enhanced/export_pdf.mjs <in> --output out.pdf` |
 | **Precise text/markdown** (code) | `node src/enhanced/read_precise.mjs <in> --format text\|markdown` |
