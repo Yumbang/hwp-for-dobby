@@ -143,21 +143,8 @@ them silently. Read them first — `read.mjs --memos`, `--track-changes`.
 | merged-cell data looks shifted | table read from flattened text | re-read with `extract_tables.mjs` |
 | `R&D` etc. special chars | (was a ≤0.7.11 bug) | fine on 0.7.19 — `&`/`<`/`>` preserved |
 
-## Behavioral Guarantee Matrix (summary — full spec in `spec/rhwp-behavior.md`)
+## Engine limitations on this build
 
-| Operation | genuine `.hwp` | `.hwpx` input |
-|---|---|---|
-| read tables (address grid) | WORKS | WORKS |
-| body edit / safe find-replace | WORKS | WORKS |
-| in-cell edit | WORKS | WORKS |
-| form fill — empty field | WORKS | WORKS |
-| form fill — pre-filled field | WORKS+WARN (#838) | WORKS+WARN |
-| create from scratch | WORKS (→ `.hwp`) | — |
-| bulk find/replace (body + cells + textboxes) | WORKS (engine ≥0.7.16) | WORKS |
-| edit a file that has memos | **BLOCKED** (exit 6; memos deleted on save, override `--allow-memo-loss`) | BLOCKED |
-| detect tracked changes (변경 내용 추적) | WORKS (FileHeader bit 14 **plus** corroborating change records — the bit alone over-reports) | NOT CHECKED (container unscannable; says so) |
-| edit a file that has tracked changes | **BLOCKED** (exit 6; changes destroyed on save, override `--allow-trackchange-loss`) | WARN + proceed (cannot scan, so refusing would be a guess) |
-| detect section structure | INFERRED from text, per document (no outline metadata exists) — exit 3 when it can't | INFERRED, same path |
-| save as HWPX | **BLOCKED** (Hancom-rejected) | BLOCKED |
+The per-operation guarantee matrix is in **`spec/rhwp-behavior.md`** — it is engine behaviour, and every row there is backed by a test. What bites *before* you pick a command is in **Failure modes** above.
 
 Engine pinned to rhwp **0.7.19** (`vendor/rhwp/VERSION`). Known live limitations on this build: form #838 (warned), memos not modeled — they ride along only in a section's `raw_stream` round-trip cache, so editing their section deletes them on save (guarded, exit 6, override `--allow-memo-loss`; read with `read.mjs --memos`) — tracked changes not modeled either, same `raw_stream` mechanism and same guard (exit 6, override `--allow-trackchange-loss`; read with `read.mjs --track-changes`), and no outline metadata to read, so `sections.mjs` infers structure and reports its confidence — and shapes/charts not supported. The full, test-backed rule set is in `spec/rhwp-behavior.md`; `test/` enforces it.
