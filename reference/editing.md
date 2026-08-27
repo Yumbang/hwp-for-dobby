@@ -6,6 +6,19 @@
 
 Every editing script (`edit_text`, `edit_cell`, `table`, `format`, `header_footer`, `footnote`, `fill_form`, `unlock`, `create`) follows the same contract: edit → atomic `.hwp` save → reload → verify → report `verified`. A `verified: false` result is a **failed task** (exit 5), never reported as success.
 
+**What `verified` does and does not prove.** It is a persistence check, not a correctness check, and the difference has already cost a bug:
+
+| signal | proves |
+|---|---|
+| `ok: true` from the engine | nothing — it is returned for typos, wrong types, invalid enums and inert keys |
+| `verified: true` | the edit is **on disk** and the file reloads cleanly |
+| `effect` / `confirmed` / `applied` | the **named property** holds the requested value on disk |
+| a rendered page | how it actually **looks** |
+
+Only the last row sees layout. Everything above it reads bytes back, so an edit can be right at every level and still wrap, overflow or paginate wrong. That is not a theoretical gap: `--op bullet` once wrote correct markers with correct text and a clean round trip, while every wrapped line returned to the marker's own column, because the leading spaces went in without the matching hanging indent. `verified` was `true` and the document was wrong.
+
+So: for edits that move text or geometry — indents, bullets, images, font sizes, table widths — treat `verified` as the floor. On Claude Code, `render.mjs` a page and look at it. Off Claude Code there is no renderer, so say plainly that the layout was not visually confirmed rather than implying it was.
+
 - **`fill_form.mjs`** — `--list` shows fields (`occurrence` / `sameNameCount`). `--values` fills them. A name that appears more than once must be written `name[N]` or the fill is refused as ambiguous — never silently fill only the first. `--dry-run` writes nothing. `--rows` + `--out-dir` fills one output per data row. **Empty fields fill cleanly.** Filling a **pre-populated** field warns about upstream bug #838 (char-shape not shifted → Hancom may reject) — visually verify those with `render.mjs`.
 - **`edit_cell.mjs`** — `--table N` uses the same index as `extract_tables` (top-level tables). Or `--section/--paragraph/--control`. Address a cell by linear `--cell` index or by `--row/--col`. Out-of-range cell index is caught and reported (the raw engine call would throw). Covered (merged-away) positions are NOT_FOUND with a pointer at the origin.
 - **`edit_text.mjs --format`** — inserted text is not neutral. `insertText` has no formatting argument, so the engine gives new characters the formatting of the character **before** the insertion point (at offset 0, the one after). Insert a sentence beside a bold heading and the whole sentence arrives bold. `--format` takes the same character-property JSON as `format.mjs --op char` — one vocabulary, so what you read back can be written straight in — and formats only the characters that were inserted. The span is measured from the engine (paragraph length before vs after), never from `text.length`, because JS counts a surrogate pair as two units and the document counts it as one; `"테스트🙂끝"` is 6 in JS and 5 on the page. `--format` is refused on `--op delete` and `--op insert-paragraph`: the latter creates an *empty* paragraph, and character formatting on a paragraph with no characters is silently ignored — insert the paragraph, then insert its text with `--format`. A tab inside the inserted text keeps its own (absent) formatting; you get a warning. The result carries `effect`, the same per-key verdict `format.mjs` reports, read back from the saved file.

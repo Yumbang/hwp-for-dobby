@@ -42,7 +42,7 @@ Output is **always HWP 5.0 (`.hwp`)**. Native HWPX save is rejected by Hancom Of
 | Edit a table cell | `node src/core/edit_cell.mjs <in> --op set --table N --row R --col C --text "..." --output <out.hwp>` (same `index` as extract_tables; or `--section/--paragraph/--control`) |
 | **Images** (list · insert · replace · caption) | `node src/core/image.mjs <in> --op list\|insert\|replace\|remove [--file img.png] [--index N] [--caption "..."] --output <out.hwp>` |
 | Create/merge/split a table | `node src/core/table.mjs <in> --op create\|merge\|split ... --output <out.hwp>` |
-| **Formatting** (char · para · bullets) | `node src/core/format.mjs <in> --op char\|para\|bullet ... --output <out.hwp>` — `--op bullet --paragraphs 6-9 --char '□' [--remove]` · `--op indent --paragraphs 6-9 --level N`. Korean lists use a typed glyph ~2x more than HWP's bullet feature, and indent depth is leading SPACES ~3x more than `marginLeft`; `auto` follows the document. Getter lengths read back in 1/48 inch, **not points** |
+| **Formatting** (char · para · bullets) | `node src/core/format.mjs <in> --op char\|para\|bullet ... --output <out.hwp>` — `--op bullet --paragraphs 6-9 --char '□' [--remove]` · `--op indent --paragraphs 6-9 --level N`. Korean lists use a typed glyph ~2x more than HWP's bullet feature, and depth is leading SPACES ~3x more than `marginLeft`; `auto` follows the document |
 | Header/footer | `node src/core/header_footer.mjs <in> --op create\|apply ... --output <out.hwp>` |
 | Footnote | `node src/core/footnote.mjs <in> --op insert\|delete ... --output <out.hwp>` |
 | List / fill form fields | `node src/core/fill_form.mjs <in> --list` · `--values vals.json --output <out.hwp>` · duplicate names use `name[N]` · `--dry-run` · `--rows file.jsonl --out-dir dir/` |
@@ -108,10 +108,14 @@ them silently. Read them first — `read.mjs --memos`, `--track-changes`.
 
 ## Verify outputs after every run
 
-- **Edits**: trust the `verified` field, not the exit code alone. `verified: true` = the change survived save→reload. If `false`, the engine couldn't do it — tell the user; do not claim success.
+- **Edits — know what `verified` covers.** Three levels, and they are not the same claim:
+  - `ok: true` from the engine proves **nothing**. It is returned for typos, wrong types, invalid enums and inert keys alike.
+  - `verified: true` proves the edit **is on disk and reloads cleanly**. `false` is a failed task (exit 5) — say so, never claim success.
+  - `effect` / `confirmed` / `applied` proves **the specific property holds the requested value on disk**.
+  - **None sees LAYOUT.** They read bytes, not a rendered page — a change can pass all three and still wrap, overflow or paginate wrong. A bulleted list once did exactly that, every wrapped line falling back to the marker's column. When an edit moves text or geometry (indents, bullets, images, sizes, table widths), `verified` is the floor: **render it and look** (`render.mjs`, Claude Code only), or say plainly that layout was not visually confirmed.
 - **Table data**: came from `extract_tables.mjs` (address-aware), never from flattened text.
 - **Structure**: read the `detection:` block on stderr. At `confidence=low`, confirm with `--op outline` before quoting an `--op extract`, and tell the user the outline was inferred.
-- **Visual fidelity** (Korean typography, tab stops, form styling): on Claude Code, render a page with `render.mjs` and look at it. This matters more for HWP than for docx.
+- **Visual fidelity** (Korean typography, tab stops, form styling): same instrument, same limit — `render.mjs` is the only thing here that sees a page. This matters more for HWP than for docx.
 - **Forms**: after filling, re-list or render to confirm values landed and aren't wearing placeholder styling.
 
 ## Done when
