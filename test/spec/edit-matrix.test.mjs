@@ -494,3 +494,76 @@ test("edit_text --format: a silently-ignored property is refused, not applied", 
     assert.equal(existsSync(dst), false, `${props}: a refused edit must write no file`);
   }
 });
+
+// ── HWPX → HWP export: what it may and may not change ─────────────────────
+//
+// An HWPX input is converted on export (the engine emits .hwp only), and that
+// conversion is allowed to normalise structure. Measured across the corpus:
+// 0 of 106 .hwp documents change their paragraph count on a no-op round trip,
+// and 1 of 18 .hwpx documents does — it gains ONE empty paragraph at the end
+// of a non-final section that did not already end with one. Spec rule 70.
+//
+// That is benign, and these tests pin the reasons it is benign rather than the
+// count itself: no text is lost, no existing address moves, and it happens once
+// rather than accumulating. If a future engine broke any of those, an agent
+// holding paragraph addresses across a save would silently edit the wrong line.
+
+const HWPX_FIX = join(ROOT, "samples", "fixture-table.hwpx");
+
+function allText(doc) {
+  const out = [];
+  for (let s = 0; s < doc.getSectionCount(); s++) {
+    for (let p = 0; p < doc.getParagraphCount(s); p++) {
+      const len = doc.getParagraphLength(s, p);
+      if (len) out.push(doc.getTextRange(s, p, 0, len));
+    }
+  }
+  return out.join("\n");
+}
+
+test("hwpx→hwp export: no text is lost and no existing address moves", async () => {
+  const { writeFileSync } = await import("node:fs");
+  const a = await loadDocument(HWPX_FIX);
+  const dst = out("hwpx-rt.hwp");
+  writeFileSync(dst, Buffer.from(a.exportHwp()));
+  const b = await loadDocument(dst);
+
+  assert.equal(allText(b), allText(a), "conversion must not change body text");
+  assert.equal(b.pageCount(), a.pageCount(), "nor the page count");
+  // The invariant that matters most: an address an agent already holds still
+  // points at the same paragraph after the save.
+  for (let s = 0; s < a.getSectionCount(); s++) {
+    for (let p = 0; p < a.getParagraphCount(s); p++) {
+      assert.equal(
+        b.getParagraphLength(s, p),
+        a.getParagraphLength(s, p),
+        `paragraph (${s},${p}) must not drift`,
+      );
+    }
+  }
+  // Any normalisation only APPENDS.
+  for (let s = 0; s < a.getSectionCount(); s++) {
+    assert.ok(
+      b.getParagraphCount(s) >= a.getParagraphCount(s),
+      `section ${s} must not lose paragraphs`,
+    );
+  }
+});
+
+test("hwpx→hwp export: normalisation happens once, it does not accumulate", async () => {
+  // A conversion artifact that grew on every save would turn a document that
+  // is edited repeatedly into one with a tail of empty paragraphs.
+  const { writeFileSync } = await import("node:fs");
+  let current = HWPX_FIX;
+  const counts = [];
+  for (let i = 0; i < 4; i++) {
+    const d = await loadDocument(current);
+    counts.push([...Array(d.getSectionCount()).keys()].map((s) => d.getParagraphCount(s)));
+    const dst = out(`hwpx-acc-${i}.hwp`);
+    writeFileSync(dst, Buffer.from(d.exportHwp()));
+    current = dst;
+  }
+  // Rounds 1..3 are all .hwp→.hwp and must be identical to each other.
+  assert.deepEqual(counts[2], counts[1], "a second .hwp round trip changes nothing");
+  assert.deepEqual(counts[3], counts[1], "and neither does a third");
+});
