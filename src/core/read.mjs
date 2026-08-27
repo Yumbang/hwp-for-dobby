@@ -84,6 +84,7 @@ import {
   tableControlsInParagraph,
 } from "../lib/doc_walk.mjs";
 import { EXIT, fail } from "../lib/exit-codes.mjs";
+import { parseMarker } from "../lib/bullets.mjs";
 import { classifyPlacement, pictureMarker } from "../lib/objects.mjs";
 import { readMemos } from "../lib/memo.mjs";
 import { flatLoc, readCellText, tableDims } from "../lib/tables.mjs";
@@ -209,11 +210,11 @@ const format = arg("--format", "text");
 const pageArg = arg("--page", "all");
 const mode = arg("--mode", "strict");
 
-if (format !== "text" && format !== "svg") {
+if (format !== "text" && format !== "svg" && format !== "json") {
   // 'markdown' is intentionally NOT a core format: markdown table grids need
   // the CLI (enhanced/read_precise.mjs, Phase 3). For table DATA use
   // extract_tables.mjs.
-  fail(EXIT.USAGE, `unknown --format: ${format} (expected text|svg)`);
+  fail(EXIT.USAGE, `unknown --format: ${format} (expected text|json|svg)`);
 }
 if (mode !== "strict" && mode !== "best-effort") {
   fail(EXIT.USAGE, `unknown --mode: ${mode} (expected strict|best-effort)`);
@@ -242,6 +243,62 @@ function flattenTableInline(doc, s, p, ctrl, writeLine) {
     const t = readCellText(doc, loc, k);
     if (t.length) write(t);
   }
+}
+
+// ── JSON: body text WITH the address every editing script needs ───────────
+//
+// WHY THIS EXISTS. Every targeted edit — format.mjs, edit_text.mjs — is
+// addressed by an integer (section, paragraph). Until this branch, no CORE
+// reader emitted that number: --format text prints the lines and throws the
+// indices away, and the only listing that carried them was
+// enhanced/debug.mjs --op dump, which needs the native binary and therefore
+// only exists on Claude Code. A test agent asked to renumber a 개조식 list hit
+// exactly that wall and had to fall back to the enhanced tier; on claude.ai or
+// cowork it would have had no supported route at all. search.mjs --format json
+// does carry the address, but only for text you can already name, so it cannot
+// answer "which paragraphs are level-2 items".
+//
+// Deliberately NOT a formatting dump. It carries what you need to ADDRESS a
+// paragraph — index, length, and the 개조식 marker if it has one — because
+// --op char needs an explicit range and the bullet/indent ops need to know
+// which paragraphs already carry a marker. Character and paragraph properties
+// are a separate question with its own answer.
+if (format === "json") {
+  const doc = await loadOrExit(inputPath);
+  const paragraphs = [];
+  for (const { s, p } of eachParagraph(doc)) {
+    const text = paragraphText(doc, s, p);
+    const tableCtrls = tableControlsInParagraph(doc, s, p);
+    const pics = pictureControlsInParagraph(doc, s, p);
+    const marker = parseMarker(text);
+    paragraphs.push({
+      section: s,
+      paragraph: p,
+      // The char count the engine uses, which is what --start/--end index
+      // into. NOT text.length: an astral character is two JS units and one
+      // engine unit (spec rule 63).
+      length: doc.getParagraphLength(s, p),
+      text,
+      ...(marker
+        ? { marker: { glyph: marker.glyph, indentChars: marker.indent.length, prefixLength: marker.prefixLength } }
+        : {}),
+      ...(tableCtrls.length ? { tables: tableCtrls.length } : {}),
+      ...(pics.length ? { pictures: pics.length } : {}),
+    });
+  }
+  process.stdout.write(
+    JSON.stringify(
+      {
+        input: inputPath,
+        sectionCount: doc.getSectionCount(),
+        paragraphCount: paragraphs.length,
+        paragraphs,
+      },
+      null,
+      2,
+    ) + "\n",
+  );
+  process.exit(EXIT.OK);
 }
 
 // ── SVG ───────────────────────────────────────────────────────────────────

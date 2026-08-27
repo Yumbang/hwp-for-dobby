@@ -124,3 +124,71 @@ test("cross-format: strict withholds the .hwpx merged cell, best-effort reveals 
     "best-effort must flatten the .hwpx merged cell value",
   );
 });
+
+// ── --format json: the address every editing script needs ─────────────────
+//
+// Every targeted edit is addressed by an integer (section, paragraph), and
+// until this existed no CORE reader emitted that number — the only listing
+// that carried it was enhanced/debug.mjs, which needs the native binary and so
+// exists only on Claude Code. A test agent asked to renumber a 개조식 list hit
+// exactly that wall. These pin the shape an agent depends on.
+
+test("read --format json: every paragraph carries its (section, paragraph)", async () => {
+  const r = spawnSync(
+    process.execPath,
+    [join("src", "core", "read.mjs"), join("samples", "fixture-headings.hwp"), "--format", "json"],
+    { cwd: ROOT, encoding: "utf8" },
+  );
+  assert.equal(r.status, 0, r.stderr);
+  const j = JSON.parse(r.stdout);
+  assert.equal(typeof j.paragraphCount, "number");
+  assert.equal(j.paragraphs.length, j.paragraphCount);
+  // The indices must be usable as an address: contiguous from 0 within a section.
+  const sec0 = j.paragraphs.filter((p) => p.section === 0);
+  sec0.forEach((p, i) => assert.equal(p.paragraph, i, "paragraph indices are contiguous"));
+  for (const p of j.paragraphs) {
+    assert.equal(typeof p.length, "number");
+    assert.equal(typeof p.text, "string");
+  }
+});
+
+test("read --format json: length is the ENGINE's count, usable as --start/--end", async () => {
+  // Not text.length — an astral character is two JS units and one engine unit
+  // (spec rule 63), and --op char indexes in engine units.
+  const { loadDocument } = await import("../../src/lib/_bootstrap.mjs");
+  const doc = await loadDocument(join(ROOT, "samples", "fixture-headings.hwp"));
+  const r = spawnSync(
+    process.execPath,
+    [join("src", "core", "read.mjs"), join("samples", "fixture-headings.hwp"), "--format", "json"],
+    { cwd: ROOT, encoding: "utf8" },
+  );
+  const j = JSON.parse(r.stdout);
+  for (const p of j.paragraphs.slice(0, 12)) {
+    assert.equal(
+      p.length,
+      doc.getParagraphLength(p.section, p.paragraph),
+      `p${p.paragraph} length must match the engine`,
+    );
+  }
+});
+
+test("read --format json: 개조식 markers are reported so a list can be planned", async () => {
+  const r = spawnSync(
+    process.execPath,
+    [join("src", "core", "read.mjs"), join("samples", "fixture-headings.hwp"), "--format", "json"],
+    { cwd: ROOT, encoding: "utf8" },
+  );
+  const j = JSON.parse(r.stdout);
+  const marked = j.paragraphs.filter((p) => p.marker);
+  assert.ok(marked.length >= 3, "this fixture has 개조식 markers");
+  for (const p of marked) {
+    assert.equal(typeof p.marker.glyph, "string");
+    assert.equal(p.marker.glyph.length >= 1, true);
+    assert.equal(typeof p.marker.indentChars, "number");
+    assert.ok(p.text.startsWith(" ".repeat(p.marker.indentChars) + p.marker.glyph));
+  }
+  // A paragraph that is not a list item must NOT be reported as one.
+  const plain = j.paragraphs.find((p) => p.text === "1. 사업 개요");
+  assert.ok(plain, "precondition");
+  assert.equal(plain.marker, undefined, "a numbered heading is not a bullet");
+});

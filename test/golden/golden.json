@@ -211,7 +211,7 @@
       ],
       "status": 2,
       "stdout": "",
-      "stderr": "unknown --format: markdown (expected text|svg)\n"
+      "stderr": "unknown --format: markdown (expected text|json|svg)\n"
     },
     "read/bad-mode": {
       "script": "src/core/read.mjs",

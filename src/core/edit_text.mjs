@@ -11,11 +11,30 @@
 // read.mjs / info.mjs. Three operations:
 //
 //   insert            → insertText(sec, para, offset, text)   inserts `text`
-//                       at char `offset` (default 0).
+//                       at char `offset` (default 0). With --format, the
+//                       inserted characters are then formatted (see below).
 //   delete            → deleteText(sec, para, offset, count)  removes `count`
 //                       chars starting at `offset` (default offset 0, count 1).
 //   insert-paragraph  → insertParagraph(sec, para)            opens a new empty
 //                       paragraph at index `para` in the section.
+//
+// --format '<json>' — INSERTED TEXT INHERITS THE ANCHOR OTHERWISE.
+//
+// insertText takes no formatting argument, so the engine gives the new text the
+// formatting of the character BEFORE the insertion point (at offset 0, the one
+// after). That is spec rule 63, and it is why a sentence added next to a bold
+// heading arrives entirely bold. --format takes the same character-property
+// JSON that format.mjs --op char accepts — one vocabulary, so what you read
+// from a document can be written straight back:
+//
+//   --format '{"bold":true}'   --format '{"italic":true,"textColor":"#c00000"}'
+//
+// THE RANGE IS MEASURED, NOT COMPUTED. The formatted span is
+// [offset, offset + delta) where delta is getParagraphLength AFTER minus
+// BEFORE. It is deliberately not offset + text.length: JS string length counts
+// a surrogate pair as 2 and the engine counts it as 1, so "테스트🙂끝" is 6 in
+// JS and 5 in the document, and text.length would format one character that
+// was never inserted. Asking the engine removes the assumption entirely.
 //
 // Why these primitives rather than a search-and-replace: they are positional.
 // This script edits at coordinates the caller already knows, so there is no
@@ -45,16 +64,21 @@
 //
 // Prints a one-line JSON result on success:
 //   { ok, op, section, paragraph, offset?, text?, count?, verified, outputPath }
+// With --format it also carries { format, formattedRange, effect } — `effect`
+// is the same per-key verdict format.mjs reports, read back from the SAVED
+// file, so a property the engine accepted and ignored is visible.
 
 import { loadDocument } from "../lib/_bootstrap.mjs";
 import { EXIT, fail } from "../lib/exit-codes.mjs";
+import { classifyEffect, validateProps } from "../lib/format_props.mjs";
 import { assertMemoSafe } from "../lib/memo.mjs";
 import { assertTrackChangeSafe } from "../lib/trackchange.mjs";
 import { exportVerify } from "../lib/verify.mjs";
 
 const USAGE =
   "usage: edit_text.mjs <input> --op insert|delete|insert-paragraph " +
-  "--section N --paragraph N [--offset N] [--text <text>] [--count N] --output <out.hwp>";
+  "--section N --paragraph N [--offset N] [--text <text>] [--count N] " +
+  "[--format '<char-props json>'] [--allow-unknown-props] --output <out.hwp>";
 
 // Minimal option parser in the style of the sibling core scripts: one
 // positional input, the rest are `--name value` pairs. We collect raw strings
@@ -67,6 +91,8 @@ let paragraph = null;
 let offset = null;
 let text = null;
 let count = null;
+let formatRaw = null;
+let allowUnknownProps = false;
 
 const argv = process.argv.slice(2);
 for (let i = 0; i < argv.length; i++) {
@@ -81,6 +107,8 @@ for (let i = 0; i < argv.length; i++) {
   else if (a === "--offset") offset = argv[++i];
   else if (a === "--text") text = argv[++i];
   else if (a === "--count") count = argv[++i];
+  else if (a === "--format") formatRaw = argv[++i];
+  else if (a === "--allow-unknown-props") allowUnknownProps = true;
   // A bare boolean, read straight from process.argv by assertTrackChangeSafe
   // (lib/trackchange.mjs). It is named here only so this script's strict parser
   // does not reject the guard's own documented override as an unknown option.
@@ -129,6 +157,46 @@ if (op === "insert") {
 }
 // insert-paragraph needs only --section/--paragraph (already parsed).
 
+// --format is validated BEFORE the document is touched, so a bad property is a
+// usage error that writes no file — same contract as format.mjs.
+let formatProps = null;
+if (formatRaw !== null) {
+  if (op !== "insert") {
+    fail(
+      EXIT.USAGE,
+      `error: --format applies only to --op insert (got --op ${op}).\n` +
+        `       --op delete removes text, and --op insert-paragraph creates an EMPTY\n` +
+        `       paragraph — character formatting on a paragraph with no characters is\n` +
+        `       silently ignored by the engine (spec rule 62). To format a new\n` +
+        `       paragraph, insert-paragraph first, then insert its text --format.\n${USAGE}`,
+    );
+  }
+  try {
+    formatProps = JSON.parse(formatRaw);
+  } catch (e) {
+    fail(EXIT.USAGE, `error: --format is not valid JSON: ${e?.message ?? e}\n${USAGE}`);
+  }
+  if (formatProps === null || typeof formatProps !== "object" || Array.isArray(formatProps)) {
+    fail(EXIT.USAGE, `error: --format must be a JSON object, got ${JSON.stringify(formatProps)}\n${USAGE}`);
+  }
+  // Character properties only: the span being formatted is a run of characters,
+  // not a paragraph. A paragraph key here is a routing mistake worth naming.
+  const { errors, warnings } = validateProps("char", formatProps, {
+    allowUnknown: allowUnknownProps,
+  });
+  if (errors.length) {
+    fail(
+      EXIT.USAGE,
+      `error: --format rejected (the engine reports success for these and applies nothing):\n` +
+        errors.map((e) => `  - ${e}`).join("\n"),
+    );
+  }
+  for (const w of warnings) process.stderr.write(`WARNING: ${w}\n`);
+  if (text === "") {
+    fail(EXIT.USAGE, `error: --format with empty --text would format nothing\n${USAGE}`);
+  }
+}
+
 // Refuse a memo-bearing input (the engine drops memos on save) unless the
 // caller passed --allow-memo-loss. No-op on memo-free inputs.
 assertMemoSafe(inputPath, process.argv);
@@ -168,9 +236,25 @@ if (para > paraUpper || para < 0) {
 // success. The authoritative success signal is still the exportVerify round
 // trip below — this guards the in-memory call only.
 let applied;
+// Measured across the insert, never computed from text.length — see the header.
+let lenBefore = null;
+let formattedRange = null;
+let beforeProps = null;
 try {
   let raw;
   if (op === "insert") {
+    if (formatProps) {
+      lenBefore = doc.getParagraphLength(sec, para);
+      // The pre-edit properties at the anchor, for the effect report: this is
+      // the formatting the inserted text would have INHERITED, which is the
+      // baseline a caller cares about when asking "did --format do anything?".
+      const probe = lenBefore > 0 ? Math.max(0, Math.min(off, lenBefore) - 1) : 0;
+      try {
+        beforeProps = lenBefore > 0 ? JSON.parse(doc.getCharPropertiesAt(sec, para, probe)) : null;
+      } catch {
+        beforeProps = null;
+      }
+    }
     raw = doc.insertText(sec, para, off, text);
   } else if (op === "delete") {
     raw = doc.deleteText(sec, para, off, cnt);
@@ -183,6 +267,40 @@ try {
 }
 if (!applied || applied.ok !== true) {
   fail(EXIT.CORRUPTION, `error: engine reported failure for ${op}: ${JSON.stringify(applied)}`);
+}
+
+// Format exactly the characters that were inserted. The span comes from the
+// engine's own length accounting, so astral characters (a surrogate pair is 2
+// in JS and 1 here) cannot push the end past the insertion.
+if (formatProps) {
+  const lenAfter = doc.getParagraphLength(sec, para);
+  const delta = lenAfter - lenBefore;
+  if (delta <= 0) {
+    fail(
+      EXIT.CORRUPTION,
+      `error: --format could not be applied — the paragraph length did not grow ` +
+        `(${lenBefore} → ${lenAfter}) after inserting ${JSON.stringify(text)}. ` +
+        `Formatting a zero-width range would silently do nothing.`,
+    );
+  }
+  formattedRange = { start: off, end: off + delta };
+  let fr;
+  try {
+    fr = JSON.parse(doc.applyCharFormat(sec, para, off, off + delta, JSON.stringify(formatProps)));
+  } catch (e) {
+    fail(EXIT.CORRUPTION, `error: engine rejected --format on the inserted span: ${e?.message ?? e}`);
+  }
+  if (!fr || fr.ok !== true) {
+    fail(EXIT.CORRUPTION, `error: engine reported failure for --format: ${JSON.stringify(fr)}`);
+  }
+  // A tab carries no character shape, so it never takes the formatting. Say so
+  // rather than letting the effect report look inexplicably partial.
+  if (text.includes("\t")) {
+    process.stderr.write(
+      "WARNING: the inserted text contains a tab; tabs do not take character " +
+        "formatting, so that position stays as it was.\n",
+    );
+  }
 }
 
 // Round-trip verification (universal edit contract). insert asserts the text
@@ -210,6 +328,38 @@ if (!result.verified) {
   );
 }
 
+// --format is not text-probeable, so exportVerify's clean round-trip is not by
+// itself proof the formatting stuck. Re-read the inserted span from the SAVED
+// file and report a per-key verdict, the same way format.mjs does. This is the
+// check that catches an engine that accepted a property and dropped it on save.
+let effect = null;
+if (formatProps) {
+  try {
+    const back = await loadDocument(result.outputPath);
+    const afterProps = JSON.parse(back.getCharPropertiesAt(sec, para, off));
+    effect = {};
+    for (const [key, want] of Object.entries(formatProps)) {
+      effect[key] = classifyEffect(key, want, beforeProps, afterProps);
+    }
+    const dead = Object.entries(effect).filter(([, v]) => v === "no-effect");
+    if (dead.length) {
+      process.stdout.write(JSON.stringify({ ...result, effect }) + "\n");
+      fail(
+        EXIT.CORRUPTION,
+        `error: the text was inserted but --format did NOT take on disk: ` +
+          `${dead.map(([k]) => k).join(", ")}.\n` +
+          `       The engine reported success for it. Do not deliver ${output}.`,
+      );
+    }
+  } catch (e) {
+    if (e?.code === "ERR_FAIL") throw e;
+    fail(
+      EXIT.CORRUPTION,
+      `error: could not confirm --format from the saved file: ${e?.message ?? e}`,
+    );
+  }
+}
+
 const summary = {
   ok: true,
   op,
@@ -217,6 +367,7 @@ const summary = {
   paragraph: para,
   ...(op === "insert" ? { offset: off, text } : {}),
   ...(op === "delete" ? { offset: off, count: cnt } : {}),
+  ...(formatProps ? { format: formatProps, formattedRange, effect } : {}),
   charOffset: applied.charOffset,
   verified: true,
   bytesWritten: result.bytesWritten,

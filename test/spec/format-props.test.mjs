@@ -143,6 +143,58 @@ test("validator: reports every problem at once, not just the first", () => {
   assert.equal(errs.length, 3, "an agent should be able to fix all of them in one edit");
 });
 
+// ── the 2026-08-27 correction ──────────────────────────────────────────────
+//
+// Six of the seven INEFFECTIVE entries were wrong. Nothing tested them, which
+// is exactly why they survived: the table was asserted only where it was
+// right. These tests pin the corrected judgements, and the engine-truth pass
+// at the bottom of this file proves the judgements against the engine itself.
+
+test("correction: lineSpacingType and underlineType are ACCEPTED — they work", () => {
+  // Both were in INEFFECTIVE, so format.mjs refused them with USAGE(2) while
+  // the engine applied them perfectly well.
+  assert.deepEqual(ok("para", { lineSpacingType: "Fixed" }), []);
+  assert.deepEqual(ok("para", { lineSpacingType: "Percent" }), []);
+  assert.deepEqual(ok("char", { underlineType: "Bottom" }), []);
+  assert.deepEqual(ok("char", { underlineType: "Top" }), []);
+  assert.deepEqual(ok("char", { underlineType: "None" }), []);
+});
+
+test("correction: the values that FOOLED the old judgement are still refused", () => {
+  // "AtLeast" and "Solid" are silently ignored by the engine and read back as
+  // "Percent"/"None". Testing with these is what produced the wrong verdict.
+  const ls = ok("para", { lineSpacingType: "AtLeast" });
+  assert.match(ls[0], /must be one of "Percent", "Fixed"/);
+  assert.deepEqual(ok("para", { lineSpacingType: "BetweenLines" }).length, 1);
+  const ut = ok("char", { underlineType: "Solid" });
+  assert.match(ut[0], /must be one of "None", "Bottom", "Top"/);
+  assert.equal(ok("char", { underlineType: "Single" }).length, 1);
+});
+
+test("correction: a wrong-NAME key redirects to the working key", () => {
+  // These named real features under names the engine does not have. Calling
+  // them "unsupported" sent the caller away from a capability that exists.
+  for (const [wrong, right] of [
+    ["charSpacing", "spacings"],
+    ["charWidth", "ratios"],
+    ["bgColor", "shadeColor"],
+    ["shadow", "shadowType"],
+    ["outline", "outlineType"],
+  ]) {
+    const errs = ok("char", { [wrong]: 1 });
+    assert.equal(errs.length, 1, `${wrong} should produce one error`);
+    assert.match(errs[0], new RegExp(`the working key is "${right}"`), wrong);
+    assert.match(errs[0], /--allow-unknown-props/, `${wrong} must offer the escape hatch`);
+    assert.doesNotMatch(errs[0], /NO EFFECT/, `${wrong} is a rename, not an inert key`);
+  }
+});
+
+test("correction: fontFamily stays inert but now names the route that works", () => {
+  const errs = ok("char", { fontFamily: "굴림" });
+  assert.match(errs[0], /NO EFFECT/);
+  assert.match(errs[0], /applyStyle/, "the one working route must be named");
+});
+
 test("suggestKey: only suggests a genuinely close match", () => {
   assert.equal(suggestKey("bolditalic", Object.keys(CHAR_PROPS)), null);
   assert.equal(suggestKey("bld", Object.keys(CHAR_PROPS)), "bold");
@@ -284,4 +336,100 @@ test("format.mjs: the error names the valid keys, so a fix needs no docs", async
       assert.ok(r.stderr.includes(key), `the error should list "${key}"`);
     }
   });
+});
+
+// ── engine truth: the correction, proved against the engine ────────────────
+//
+// The validator tests above pin what WE claim. These pin what the ENGINE does,
+// which is the thing the old table got wrong. Every assertion reads the value
+// back from the SAVED file, never from memory — the whole class of bug this
+// file exists to prevent comes from trusting an in-memory read.
+//
+// Paragraph 6 of fixture-headings.hwp is used because it has real text.
+// Paragraph 5 is EMPTY, and character formatting on an empty paragraph is a
+// silent no-op (spec rule 62) — a test written there would pass for the wrong
+// reason, or fail for one.
+
+const FIX = join(ROOT, "samples", "fixture-headings.hwp");
+const S = 0;
+const P = 6;
+
+async function roundTrip(mutate) {
+  const { writeFileSync } = await import("node:fs");
+  const doc = await loadDocument(FIX);
+  mutate(doc);
+  return await withOut(async (out) => {
+    writeFileSync(out, Buffer.from(doc.exportHwp()));
+    return await loadDocument(out);
+  });
+}
+
+test("engine: lineSpacingType really applies — the old table said it did not", async () => {
+  const back = await roundTrip((d) =>
+    d.applyParaFormat(S, P, JSON.stringify({ lineSpacingType: "Fixed" })),
+  );
+  assert.equal(JSON.parse(back.getParaPropertiesAt(S, P)).lineSpacingType, "Fixed");
+});
+
+test("engine: lineSpacing changes UNIT with lineSpacingType", async () => {
+  // Under "Fixed" the value is HWPUNIT and reads back in points: 2400 -> 16pt.
+  // Documenting it as "percent" unconditionally is how a caller gets 16pt
+  // line spacing when they asked for 24x.
+  const back = await roundTrip((d) =>
+    d.applyParaFormat(S, P, JSON.stringify({ lineSpacingType: "Fixed", lineSpacing: 2400 })),
+  );
+  const p = JSON.parse(back.getParaPropertiesAt(S, P));
+  assert.equal(p.lineSpacingType, "Fixed");
+  assert.equal(p.lineSpacing, 16, "2400 HWPUNIT under Fixed reads back as 16pt");
+});
+
+test("engine: underlineType really applies, but only for Bottom/Top", async () => {
+  const good = await roundTrip((d) =>
+    d.applyCharFormat(S, P, 0, 10, JSON.stringify({ underline: true, underlineType: "Bottom" })),
+  );
+  assert.equal(JSON.parse(good.getCharPropertiesAt(S, P, 0)).underlineType, "Bottom");
+
+  // The value that produced the wrong verdict: accepted, ignored, reads "None".
+  const bad = await roundTrip((d) =>
+    d.applyCharFormat(S, P, 0, 10, JSON.stringify({ underlineType: "Solid" })),
+  );
+  assert.equal(
+    JSON.parse(bad.getCharPropertiesAt(S, P, 0)).underlineType,
+    "None",
+    'an unaccepted enum value is silently ignored — this is why "Solid" read as unsupported',
+  );
+});
+
+test("engine: the renamed keys work under their REAL names", async () => {
+  const back = await roundTrip((d) =>
+    d.applyCharFormat(
+      S, P, 0, 10,
+      JSON.stringify({ shadeColor: "#123456", shadowType: 1, outlineType: 1 }),
+    ),
+  );
+  const c = JSON.parse(back.getCharPropertiesAt(S, P, 0));
+  assert.equal(c.shadeColor, "#123456", "bgColor was the wrong name for shadeColor");
+  assert.equal(c.shadowType, 1, "shadow was the wrong name for shadowType");
+  assert.equal(c.outlineType, 1, "outline was the wrong name for outlineType");
+});
+
+test("engine: fontFamily is genuinely unsettable, and applyStyle is the way", async () => {
+  // The one INEFFECTIVE entry that was right.
+  const direct = await roundTrip((d) => {
+    d.findOrCreateFontId("굴림"); // registering first does NOT help
+    d.applyCharFormat(S, P, 0, 10, JSON.stringify({ fontFamily: "굴림" }));
+  });
+  assert.equal(
+    JSON.parse(direct.getCharPropertiesAt(S, P, 0)).fontFamily,
+    "함초롬바탕",
+    "applyCharFormat must not be believed when it reports success on a font",
+  );
+
+  // Style 17 (차례 제목) carries 함초롬돋움. Applying it moves the font.
+  const viaStyle = await roundTrip((d) => d.applyStyle(S, P, 17));
+  assert.equal(
+    JSON.parse(viaStyle.getCharPropertiesAt(S, P, 0)).fontFamily,
+    "함초롬돋움",
+    "applyStyle carries the style's font — the only route that changes one",
+  );
 });

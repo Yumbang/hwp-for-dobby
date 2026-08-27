@@ -38,16 +38,16 @@ Output is **always HWP 5.0 (`.hwp`)**. Native HWPX save is rejected by Hancom Of
 | Search with page/cell address | `node src/core/search.mjs <in> --query <q> [--limit N] [--format json]` (0 hits = exit 0) |
 | Dates / amounts with address | `node src/core/extract_data.mjs <in> [--kind date\|amount\|number\|all]` |
 | Find & replace (safe, saves) | `node src/core/replace.mjs <in> --query <q> --replacement <r> --output <out.hwp>` |
-| Insert/delete body text | `node src/core/edit_text.mjs <in> --op insert\|delete\|insert-paragraph ... --output <out.hwp>` |
+| Insert/delete body text | `node src/core/edit_text.mjs <in> --op insert\|delete\|insert-paragraph ... [--format '<char props>'] --output <out.hwp>` — **inserted text inherits the formatting of the character before it**; `--format` overrides that |
 | Edit a table cell | `node src/core/edit_cell.mjs <in> --op set --table N --row R --col C --text "..." --output <out.hwp>` (same `index` as extract_tables; or `--section/--paragraph/--control`) |
 | **Images** (list · insert · replace · caption) | `node src/core/image.mjs <in> --op list\|insert\|replace\|remove [--file img.png] [--index N] [--caption "..."] --output <out.hwp>` |
 | Create/merge/split a table | `node src/core/table.mjs <in> --op create\|merge\|split ... --output <out.hwp>` |
-| Char/paragraph formatting | `node src/core/format.mjs <in> --op char\|para ... --props '<json>' --output <out.hwp>` |
+| **Formatting** (inspect · char · para · bullets · indent) | `node src/core/format.mjs <in> --op list\|char\|para\|bullet\|indent ...` — **start with `--op list`**: it reports the shapes a document uses and where they disagree, changes nothing, and decides nothing. `--op bullet --paragraphs 6-9 --char '□' [--remove]` · `--op indent --paragraphs 6-9 --level N`. Korean lists use a typed glyph ~2x more than HWP's bullet feature, and depth is leading SPACES ~3x more than `marginLeft`; `auto` follows the document |
 | Header/footer | `node src/core/header_footer.mjs <in> --op create\|apply ... --output <out.hwp>` |
 | Footnote | `node src/core/footnote.mjs <in> --op insert\|delete ... --output <out.hwp>` |
 | List / fill form fields | `node src/core/fill_form.mjs <in> --list` · `--values vals.json --output <out.hwp>` · duplicate names use `name[N]` · `--dry-run` · `--rows file.jsonl --out-dir dir/` |
 | Unlock read-only doc | `node src/core/unlock.mjs <in> --output <out.hwp>` |
-| Build a doc from scratch | `node src/core/create.mjs --plan plan.json --output <out.hwp>` |
+| Build a doc · **batch-apply many edits** | `node src/core/create.mjs [--input <in.hwp>] --plan plan.json --output <out.hwp>` — with `--input` it replays a plan onto an existing document in **one** load/save instead of one per edit (measured 59ms vs 4,895ms for 12 edits). Every step is confirmed on reload; a plan that would misaddress a later step is refused |
 | **Vision-quality PNG** (code) | `node src/enhanced/render.mjs <in> --page N --output page.png` |
 | **PDF export** (code) | `node src/enhanced/export_pdf.mjs <in> --output out.pdf` |
 | **Precise text/markdown** (code) | `node src/enhanced/read_precise.mjs <in> --format text\|markdown` |
@@ -62,7 +62,9 @@ Scripts are ESM (Node 18+), print one-line JSON or extracted content on stdout, 
 - `.docx` → docx skill · `.xlsx` → xlsx · `.pptx` → pptx · `.pdf` → pdf · `.odt` → not supported.
 - **Producing a Hancom-readable `.hwpx`** — the engine can't; we only emit `.hwp`. Say so honestly.
 - **Reading table data off flattened text** — never. Use `extract_tables.mjs` (address/merge-aware). `read.mjs` strict mode refuses to flatten tables for exactly this reason.
-- Shape/textbox/chart insertion and style systems — not supported on this engine build (documented gap).
+- Shape/textbox/chart insertion — not supported on this engine build (documented gap).
+- **Defining** a style (create/update/delete) — the engine reports success and does nothing, and `deleteStyle` also reverts paragraphs that used the style. Reading the style list and **applying** an existing style do work.
+- **Setting a font by name** — `applyCharFormat` cannot. Applying a style the document already carries changes the font; nothing else does.
 
 ## Setup
 
@@ -106,10 +108,14 @@ them silently. Read them first — `read.mjs --memos`, `--track-changes`.
 
 ## Verify outputs after every run
 
-- **Edits**: trust the `verified` field, not the exit code alone. `verified: true` = the change survived save→reload. If `false`, the engine couldn't do it — tell the user; do not claim success.
+- **Edits — know what `verified` covers.** Three levels, and they are not the same claim:
+  - `ok: true` from the engine proves **nothing**. It is returned for typos, wrong types, invalid enums and inert keys alike.
+  - `verified: true` proves the edit **is on disk and reloads cleanly**. `false` is a failed task (exit 5) — say so, never claim success.
+  - `effect` / `confirmed` / `applied` proves **the specific property holds the requested value on disk**.
+  - **None sees LAYOUT.** They read bytes, not a rendered page — a change can pass all three and still wrap, overflow or paginate wrong. A bulleted list once did exactly that, every wrapped line falling back to the marker's column. When an edit moves text or geometry (indents, bullets, images, sizes, table widths), `verified` is the floor: **render it and look** (`render.mjs`, Claude Code only), or say plainly that layout was not visually confirmed.
 - **Table data**: came from `extract_tables.mjs` (address-aware), never from flattened text.
 - **Structure**: read the `detection:` block on stderr. At `confidence=low`, confirm with `--op outline` before quoting an `--op extract`, and tell the user the outline was inferred.
-- **Visual fidelity** (Korean typography, tab stops, form styling): on Claude Code, render a page with `render.mjs` and look at it. This matters more for HWP than for docx.
+- **Visual fidelity** (Korean typography, tab stops, form styling): same instrument, same limit — `render.mjs` is the only thing here that sees a page. This matters more for HWP than for docx.
 - **Forms**: after filling, re-list or render to confirm values landed and aren't wearing placeholder styling.
 
 ## Done when
@@ -137,21 +143,8 @@ them silently. Read them first — `read.mjs --memos`, `--track-changes`.
 | merged-cell data looks shifted | table read from flattened text | re-read with `extract_tables.mjs` |
 | `R&D` etc. special chars | (was a ≤0.7.11 bug) | fine on 0.7.19 — `&`/`<`/`>` preserved |
 
-## Behavioral Guarantee Matrix (summary — full spec in `spec/rhwp-behavior.md`)
+## Engine limitations on this build
 
-| Operation | genuine `.hwp` | `.hwpx` input |
-|---|---|---|
-| read tables (address grid) | WORKS | WORKS |
-| body edit / safe find-replace | WORKS | WORKS |
-| in-cell edit | WORKS | WORKS |
-| form fill — empty field | WORKS | WORKS |
-| form fill — pre-filled field | WORKS+WARN (#838) | WORKS+WARN |
-| create from scratch | WORKS (→ `.hwp`) | — |
-| bulk find/replace (body + cells + textboxes) | WORKS (engine ≥0.7.16) | WORKS |
-| edit a file that has memos | **BLOCKED** (exit 6; memos deleted on save, override `--allow-memo-loss`) | BLOCKED |
-| detect tracked changes (변경 내용 추적) | WORKS (FileHeader bit 14 **plus** corroborating change records — the bit alone over-reports) | NOT CHECKED (container unscannable; says so) |
-| edit a file that has tracked changes | **BLOCKED** (exit 6; changes destroyed on save, override `--allow-trackchange-loss`) | WARN + proceed (cannot scan, so refusing would be a guess) |
-| detect section structure | INFERRED from text, per document (no outline metadata exists) — exit 3 when it can't | INFERRED, same path |
-| save as HWPX | **BLOCKED** (Hancom-rejected) | BLOCKED |
+The per-operation guarantee matrix is in **`spec/rhwp-behavior.md`** — it is engine behaviour, and every row there is backed by a test. What bites *before* you pick a command is in **Failure modes** above.
 
 Engine pinned to rhwp **0.7.19** (`vendor/rhwp/VERSION`). Known live limitations on this build: form #838 (warned), memos not modeled — they ride along only in a section's `raw_stream` round-trip cache, so editing their section deletes them on save (guarded, exit 6, override `--allow-memo-loss`; read with `read.mjs --memos`) — tracked changes not modeled either, same `raw_stream` mechanism and same guard (exit 6, override `--allow-trackchange-loss`; read with `read.mjs --track-changes`), and no outline metadata to read, so `sections.mjs` infers structure and reports its confidence — and shapes/charts not supported. The full, test-backed rule set is in `spec/rhwp-behavior.md`; `test/` enforces it.

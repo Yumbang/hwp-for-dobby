@@ -71,12 +71,18 @@
 // Prints a one-line JSON result on success:
 //   {"ok":true,"output":"...","applied":[...],"verified":true}
 
-import { emptyDocument } from "../lib/_bootstrap.mjs";
+import { emptyDocument, loadDocument } from "../lib/_bootstrap.mjs";
 import { EXIT, fail } from "../lib/exit-codes.mjs";
+import { assertMemoSafe } from "../lib/memo.mjs";
+import { PLAN_OPS, confirmAll, replay } from "../lib/plan.mjs";
+import { assertTrackChangeSafe } from "../lib/trackchange.mjs";
 import { exportVerify } from "../lib/verify.mjs";
 import { readFileSync } from "node:fs";
 
-const USAGE = "usage: create.mjs --plan <plan.json> --output <out.hwp>";
+const USAGE =
+  "usage: create.mjs --plan <plan.json> --output <out.hwp>            (build from blank)\n" +
+  "       create.mjs --input <in.hwp> --plan <plan.json> --output <out.hwp>  (batch-apply)\n" +
+  `       plan ops: ${PLAN_OPS.join(", ")}   optional: "order": "descending"`;
 
 function arg(name) {
   const i = process.argv.indexOf(name);
@@ -93,6 +99,7 @@ if (flag("-h") || flag("--help")) {
 
 const planPath = arg("--plan");
 const output = arg("--output");
+const inputPath = arg("--input");
 if (!planPath || !output) {
   fail(EXIT.USAGE, USAGE);
 }
@@ -104,69 +111,37 @@ try {
   fail(EXIT.LOAD, `error: could not read/parse plan ${planPath}: ${e?.message ?? e}`);
 }
 
-// Start from a blank editable document (section 0 / paragraph 0 ready).
-const doc = await emptyDocument();
-
-// Replay each step against the engine. The first insert_text's text is
-// captured for the post-save round-trip presence check below.
-const applied = [];
-let firstInsertText;
-try {
-  for (const [i, step] of (plan.steps ?? []).entries()) {
-    switch (step.op) {
-      case "insert_text":
-        doc.insertText(step.section ?? 0, step.para ?? 0, step.char ?? 0, step.text ?? "");
-        if (firstInsertText === undefined && step.text) firstInsertText = step.text;
-        applied.push({ i, op: step.op });
-        break;
-      case "insert_paragraph":
-        doc.insertParagraph(step.section ?? 0, step.para ?? 0);
-        applied.push({ i, op: step.op });
-        break;
-      case "create_table":
-        doc.createTable(
-          step.section ?? 0,
-          step.para ?? 0,
-          step.char ?? 0,
-          step.rows,
-          step.cols,
-        );
-        applied.push({ i, op: step.op });
-        break;
-      case "insert_text_in_cell":
-        doc.insertTextInCell(
-          step.section ?? 0,
-          step.para ?? 0,
-          step.control ?? 0,
-          step.cell ?? 0,
-          step.cell_para ?? 0,
-          step.char ?? 0,
-          step.text ?? "",
-        );
-        applied.push({ i, op: step.op });
-        break;
-      case "apply_para_format": {
-        // Validate on OUR side: the engine returns {"ok":true} for anything
-        // JSON-ish, including a bare string or malformed props, so a typo'd
-        // plan would otherwise be reported as applied while doing nothing.
-        const props = step.props;
-        if (props === null || typeof props !== "object" || Array.isArray(props)) {
-          fail(
-            EXIT.USAGE,
-            `step ${i}: apply_para_format requires a "props" object, e.g. {"marginLeft":2000}`,
-          );
-        }
-        doc.applyParaFormat(step.section ?? 0, step.para ?? 0, JSON.stringify(props));
-        applied.push({ i, op: step.op });
-        break;
-      }
-      default:
-        fail(EXIT.USAGE, `unknown op at step ${i}: ${step.op}`);
-    }
+// Blank, or an existing document to batch-apply onto. The second form is what
+// makes many edits cost ONE load/save instead of one per edit: measured at 59 ms
+// against 4,895 ms for the same twelve edits run as twelve invocations, with the
+// same per-step verification in both.
+let doc;
+if (inputPath) {
+  // Batch-applying is editing, so it owes the same data-loss guards every other
+  // write script keeps. Building from blank has nothing to lose.
+  assertMemoSafe(inputPath, process.argv);
+  assertTrackChangeSafe(inputPath, process.argv);
+  try {
+    doc = await loadDocument(inputPath);
+  } catch (e) {
+    fail(EXIT.LOAD, `error: could not load ${inputPath}: ${e?.message ?? e}`);
   }
-} catch (e) {
-  fail(EXIT.CORRUPTION, `error: build failed: ${e?.message ?? e}`);
+} else {
+  doc = await emptyDocument();
 }
+
+// Replay. lib/plan.mjs refuses a plan whose later steps would be misaddressed
+// by an earlier insertion, and records an INTENT per step to confirm after the
+// save — a batch must not buy a cheaper guarantee than the individual scripts.
+// The paragraph count BEFORE the plan runs is what tells an ordinary append
+// apart from an insertion inside an existing document — only the latter can
+// renumber a paragraph a later step still addresses by its old index.
+const existingParagraphs = inputPath ? doc.getParagraphCount(0) : 0;
+const { applied, intents } = replay(doc, plan.steps ?? [], {
+  order: plan.order ?? "as-given",
+  existingParagraphs,
+});
+const firstInsertText = (plan.steps ?? []).find((st) => st.op === "insert_text" && st.text)?.text;
 
 // Verify the created document survives save→reload. When the plan inserts
 // body text, assert that first run is present on reload — proving the new
@@ -191,11 +166,29 @@ if (!result.verified) {
   );
 }
 
+// Per-step confirmation against the RELOADED file. Twelve separate invocations
+// verify twelve times; collapsing that into "the file still opens" would
+// re-open the silent-failure hole the engine's permissive ok:true creates.
+const back = await loadDocument(result.outputPath);
+const notConfirmed = confirmAll(back, intents);
+if (notConfirmed.length) {
+  process.stdout.write(JSON.stringify({ ...result, applied, notConfirmed }) + "\n");
+  fail(
+    EXIT.CORRUPTION,
+    `error: ${notConfirmed.length} step(s) did not take on disk:\n` +
+      notConfirmed.map((f) => `  - step ${f.step} (${f.op}): ${f.why}`).join("\n") +
+      `\n       Do not deliver ${output}.`,
+  );
+}
+
 process.stdout.write(
   JSON.stringify({
     ok: true,
+    mode: inputPath ? "batch-apply" : "build",
+    ...(inputPath ? { input: inputPath } : {}),
     output: result.outputPath,
     applied,
+    confirmed: intents.length,
     verified: true,
   }) + "\n",
 );

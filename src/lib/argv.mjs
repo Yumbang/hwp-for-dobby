@@ -71,3 +71,42 @@ export function inputPath(usage, argv = process.argv) {
   if (!p || p.startsWith("--")) fail(EXIT.USAGE, usage);
   return p;
 }
+
+// A set of paragraph indices: "6", "6-9", "6,8,11", or any mix of those.
+// Batch formatting (bullets, indent levels) is the point of the whole feature —
+// a user fixing a 개조식 list is fixing twenty paragraphs, not one — so the
+// selector has to be first class rather than a shell loop around --paragraph.
+//
+// Returns a sorted, de-duplicated array. Ranges are INCLUSIVE at both ends,
+// because "6-9" reads as four paragraphs to everyone who is not a programmer,
+// and this string is written by a person or by an agent quoting a person.
+// Refuses a descending range rather than silently returning nothing.
+export function paragraphSet(name, raw, usage) {
+  if (raw === undefined || raw === null || raw === "") {
+    fail(EXIT.USAGE, `error: ${name} is required (e.g. ${name} 6, ${name} 6-9, ${name} 6,8,11)\n${usage ?? ""}`);
+  }
+  const out = new Set();
+  for (const piece of String(raw).split(",")) {
+    const part = piece.trim();
+    if (part === "") continue;
+    const m = /^(\d+)\s*-\s*(\d+)$/.exec(part);
+    if (m) {
+      const lo = Number.parseInt(m[1], 10);
+      const hi = Number.parseInt(m[2], 10);
+      if (hi < lo) {
+        fail(EXIT.USAGE, `error: ${name} range "${part}" is descending (${lo} > ${hi}); write it as ${hi}-${lo}`);
+      }
+      for (let i = lo; i <= hi; i++) out.add(i);
+      continue;
+    }
+    if (!/^\d+$/.test(part)) {
+      fail(
+        EXIT.USAGE,
+        `error: ${name} could not parse "${part}" — use N, N-M (inclusive) or a comma-separated list\n${usage ?? ""}`,
+      );
+    }
+    out.add(Number.parseInt(part, 10));
+  }
+  if (out.size === 0) fail(EXIT.USAGE, `error: ${name} selected no paragraphs (got ${JSON.stringify(raw)})`);
+  return [...out].sort((a, b) => a - b);
+}
