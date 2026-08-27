@@ -221,3 +221,35 @@ test("bullet: --paragraphs is validated before the document is touched", () => {
     assert.equal(existsSync(dst), false);
   }
 });
+
+test("bullet text mode: sets the hanging indent too — the wrap bug", async () => {
+  // Found by a test agent doing the obvious thing: one --op bullet call to
+  // normalise glyph and depth together. The leading spaces in the prefix ARE
+  // an indent, so without the matching hang a bullet long enough to wrap sends
+  // its second line back to the marker's own column instead of aligning under
+  // the text. The agent produced exactly that break and did not notice it.
+  const dst = out("hang.hwp");
+  const j = bulletOk(
+    [FIX, "--op", "bullet", "--section", "0", "--paragraphs", "11",
+     "--char", "○", "--level", "2", "--output", dst],
+    "bullet with depth",
+  );
+  assert.ok(j.changes[0].hangingIndent < 0, "a depth-2 bullet owes a hanging indent");
+  const back = await loadDocument(dst);
+  assert.ok(
+    JSON.parse(back.getParaPropertiesAt(0, 11)).indent < 0,
+    "and it is on disk, not just in the report",
+  );
+});
+
+test("bullet --no-hanging: opts out, same escape as --op indent", async () => {
+  const dst = out("hang-off.hwp");
+  const j = bulletOk(
+    [FIX, "--op", "bullet", "--section", "0", "--paragraphs", "11",
+     "--char", "○", "--level", "2", "--no-hanging", "--output", dst],
+    "no-hanging",
+  );
+  assert.equal(j.changes[0].hangingIndent, null);
+  const back = await loadDocument(dst);
+  assert.equal(JSON.parse(back.getParaPropertiesAt(0, 11)).indent, 0);
+});

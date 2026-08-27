@@ -332,7 +332,34 @@ if (op === "bullet") {
       if (drop > 0) doc.deleteText(section, p, 0, drop);
       const prefix = textPrefix(bulletGlyph, level);
       doc.insertText(section, p, 0, prefix);
-      changes.push({ paragraph: p, mode, prefix, replaced: existing ? existing.glyph : null });
+
+      // The leading spaces in that prefix ARE an indent, so this owes the same
+      // hanging indent --op indent sets. Without it a bullet long enough to
+      // wrap sends its second line back to the marker's own column instead of
+      // aligning under the text. That is not hypothetical: a test agent doing
+      // the obvious thing — one --op bullet call to normalise glyph and depth —
+      // produced exactly that break, and did not notice.
+      let hangingIndent = null;
+      if (!noHanging) {
+        let fontSize;
+        try {
+          fontSize = len > 0 ? JSON.parse(doc.getCharPropertiesAt(section, p, 0)).fontSize : undefined;
+        } catch {
+          fontSize = undefined;
+        }
+        hangingIndent = hangingIndentFor(level, fontSize);
+        const hr = JSON.parse(doc.applyParaFormat(section, p, JSON.stringify({ indent: hangingIndent })));
+        if (!hr || hr.ok !== true) {
+          fail(EXIT.CORRUPTION, `error: hanging indent failed at paragraph ${p}: ${JSON.stringify(hr)}`);
+        }
+      }
+      changes.push({
+        paragraph: p,
+        mode,
+        prefix,
+        replaced: existing ? existing.glyph : null,
+        hangingIndent,
+      });
       continue;
     }
 
@@ -376,6 +403,9 @@ if (op === "bullet") {
       ok = parseMarker(text) === null && pp.headType !== "Bullet";
     } else if (mode === "text") {
       ok = text.startsWith(c.prefix);
+      if (ok && c.hangingIndent !== null && c.hangingIndent !== undefined) {
+        ok = JSON.parse(back.getParaPropertiesAt(section, c.paragraph)).indent < 0;
+      }
     } else {
       const pp = JSON.parse(back.getParaPropertiesAt(section, c.paragraph));
       ok = pp.headType === "Bullet" && pp.numberingId === bulletId;
