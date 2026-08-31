@@ -40,6 +40,21 @@ Observations are deliberately conservative. A glyph used at two leading-space de
 
 Fonts are reported under `readOnly`, never among the writable props, because `applyCharFormat` cannot set one.
 
+### Formatting inside a table cell
+
+Korean form documents keep their content in tables — **22% of real documents have no body paragraphs at all**, and on one real 성과요약 form a single cell carries 5,086 characters across ~70 paragraphs. `--op char` and `--op para` reach inside with the same address `edit_cell.mjs` uses:
+
+```
+format.mjs <in> --op para --table 0 --cell 0 --paragraphs 0,3 --props '{"alignment":"center"}' --output out.hwp
+format.mjs <in> --op list --table 0 --cell 0        # what paragraphs does this cell hold?
+```
+
+Address the table by `--table N` (the index `extract_tables` prints) or by `--section/--paragraph/--control`, and the cell by `--cell N` or `--row R --col C`. **`--paragraphs` then means cell paragraphs**, not body ones — one vocabulary, one meaning per context. Start with `--op list` on the cell: it prints each cell paragraph with its index, length, alignment and bold, which is what you need to pick targets.
+
+`--op char` does not need `--start`/`--end` here; the range defaults to the whole cell paragraph, since you already named the paragraph. Character formatting on an **empty** cell paragraph is refused rather than silently ignored — form cells are full of empty spacers, and the engine returns success for that.
+
+`--op bullet` and `--op indent` do **not** accept a cell address yet and say so rather than quietly editing a body paragraph instead. For a bulleted list inside a cell, use `--op para` with the properties directly.
+
 ### `format.mjs --op char` / `--op para` — the `--props` vocabulary
 
 `--op char` needs an explicit `--start`/`--end`; there is no whole-paragraph

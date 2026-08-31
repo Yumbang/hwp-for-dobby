@@ -61,6 +61,7 @@
 import { loadDocument } from "../lib/_bootstrap.mjs";
 import { EXIT, fail } from "../lib/exit-codes.mjs";
 import { paragraphSet } from "../lib/argv.mjs";
+import { cellParagraphs, hasCellAddress, resolveCellAddress } from "../lib/cell_addr.mjs";
 import {
   BULLET_GLYPHS,
   assertBulletChar,
@@ -87,7 +88,9 @@ const USAGE =
   "[--char '□'] [--level N] [--mode auto|hwp|text] [--remove] --output <out.hwp>\n" +
   "       format.mjs <input> --op indent --section N --paragraphs 6-9 --level N " +
   "[--scheme auto|space|margin] [--no-hanging] --output <out.hwp>\n" +
-  "       format.mjs <input> --op list [--section N] [--format text|json]   (read-only, no --output)";
+  "       format.mjs <input> --op list [--section N] [--format text|json]   (read-only, no --output)\n" +
+  "  IN A TABLE CELL: add (--table N | --section N --paragraph N --control N) and (--cell N | --row R --col C).\n" +
+  "  --paragraphs then addresses the paragraphs INSIDE that cell.";
 
 // Option parsing in the style of the sibling core scripts (replace.mjs): one
 // positional input plus named flags. Kept small.
@@ -121,6 +124,14 @@ const bulletMode = arg("--mode");
 const bulletRemove = flag("--remove");
 const indentScheme = arg("--scheme");
 const noHanging = flag("--no-hanging");
+// Cell addressing (edit_cell.mjs's convention, unchanged). Opt-in: without any
+// of these flags every command behaves exactly as before, on body paragraphs.
+const inCell = hasCellAddress();
+const cellTable = intArg("--table");
+const cellIdx = intArg("--cell");
+const cellRow = intArg("--row");
+const cellCol = intArg("--col");
+const cellControl = intArg("--control");
 
 if (flag("-h") || flag("--help")) {
   process.stdout.write(USAGE + "\n");
@@ -135,12 +146,15 @@ if (op === "list" && output) {
 }
 if (op !== "char" && op !== "para" && op !== "bullet" && op !== "indent" && op !== "list")
   fail(EXIT.USAGE, `error: --op must be 'char', 'para', 'bullet', 'indent' or 'list'\n${USAGE}`);
-if (op !== "list" && (!Number.isInteger(section) || section < 0))
+if (op !== "list" && !inCell && (!Number.isInteger(section) || section < 0))
   fail(EXIT.USAGE, `error: --section must be a non-negative integer\n${USAGE}`);
 if (op === "list" && section !== undefined && (!Number.isInteger(section) || section < 0))
   fail(EXIT.USAGE, `error: --section must be a non-negative integer\n${USAGE}`);
 if (op !== "bullet" && op !== "indent" && op !== "list") {
-  if (!Number.isInteger(paragraph) || paragraph < 0)
+  // With a cell address, --paragraph names the paragraph HOSTING the table and
+  // is resolved by lib/cell_addr (or supplied by --table), so it is not
+  // required here; the target paragraphs are inside the cell.
+  if (!inCell && (!Number.isInteger(paragraph) || paragraph < 0))
     fail(EXIT.USAGE, `error: --paragraph must be a non-negative integer\n${USAGE}`);
   if (propsRaw === undefined)
     fail(EXIT.USAGE, `error: --props <json> is required\n${USAGE}`);
@@ -192,7 +206,10 @@ if (op === "indent") {
 }
 
 // char needs an explicit [start, end) range; para applies to the whole paragraph.
-if (op === "char") {
+// Inside a CELL the range defaults to the whole cell paragraph, because the
+// caller has already named the paragraph by index and asking them to look its
+// length up first would be busywork the command can do itself.
+if (op === "char" && !inCell) {
   if (!Number.isInteger(start) || start < 0)
     fail(EXIT.USAGE, `error: --op char requires --start (non-negative integer)\n${USAGE}`);
   if (!Number.isInteger(end) || end < 0)
@@ -251,6 +268,206 @@ try {
   doc = await loadDocument(input);
 } catch (e) {
   fail(EXIT.LOAD, `error: could not load ${input}: ${e?.message ?? e}`);
+}
+
+// --- formatting INSIDE a table cell -------------------------------------------
+//
+// Korean form documents keep their content in tables — 22% of real documents
+// have no body paragraphs at all, and on one real 성과요약 form a single cell
+// carries 5,086 characters across ~70 paragraphs. Addressing only body
+// paragraphs means "centre this paragraph" cannot be done on such a document,
+// which is what this branch fixes.
+//
+// The engine has modelled cell paragraphs all along (applyParaFormatInCell,
+// applyCharFormatInCell, getCellParaPropertiesAt — all verified through disk);
+// the gap was our addressing stopping at the table. Everything below is
+// deliberately the same shape as the body path, so the two do not drift.
+if (inCell) {
+  if (op === "list") {
+    // Read-only: what paragraphs does this cell hold, and what shape is each?
+    const addr = resolveCellAddress(
+      doc,
+      { table: cellTable, section, paragraph, control: cellControl, cell: cellIdx, row: cellRow, col: cellCol },
+      USAGE,
+    );
+    const paras = cellParagraphs(doc, addr);
+    const rows = paras.map((cp) => {
+      let pp = {};
+      let cc = {};
+      try {
+        pp = JSON.parse(doc.getCellParaPropertiesAt(addr.section, addr.paragraph, addr.control, addr.cell, cp.cellPara));
+      } catch { /* a paragraph that will not answer simply reports nothing */ }
+      if (cp.length > 0) {
+        try {
+          cc = JSON.parse(
+            doc.getCellCharPropertiesAt(addr.section, addr.paragraph, addr.control, addr.cell, cp.cellPara, 0),
+          );
+        } catch { /* same */ }
+      }
+      return {
+        cellPara: cp.cellPara,
+        length: cp.length,
+        text: cp.text,
+        alignment: pp.alignment,
+        indent: pp.indent,
+        marginLeft: pp.marginLeft,
+        bold: cc.bold,
+        fontSize: cc.fontSize,
+      };
+    });
+    const listFormat = arg("--format") ?? "text";
+    if (listFormat === "json") {
+      process.stdout.write(JSON.stringify({ input, cell: addr, paragraphs: rows }, null, 2) + "\n");
+    } else {
+      process.stdout.write(
+        `cell (section ${addr.section}, paragraph ${addr.paragraph}, control ${addr.control}, cell ${addr.cell}) — ` +
+          `${rows.length} paragraph(s)\n` +
+          rows
+            .map(
+              (r) =>
+                `  cp${String(r.cellPara).padStart(3)} len=${String(r.length).padStart(4)} ` +
+                `${(r.alignment ?? "?").padEnd(8)} ${r.bold ? "B" : "-"} ${JSON.stringify(r.text.slice(0, 46))}`,
+            )
+            .join("\n") +
+          "\n",
+      );
+    }
+    process.exit(EXIT.OK);
+  }
+
+  if (op !== "char" && op !== "para") {
+    fail(
+      EXIT.USAGE,
+      `error: --op ${op} does not support cell addressing yet; --op char and --op para do.\n` +
+        `       For bullets and indents inside a cell, use --op para with the props directly.\n${USAGE}`,
+    );
+  }
+
+  const addr = resolveCellAddress(
+    doc,
+    { table: cellTable, section, paragraph, control: cellControl, cell: cellIdx, row: cellRow, col: cellCol },
+    USAGE,
+  );
+  const paras = cellParagraphs(doc, addr);
+  // --paragraphs now means CELL paragraphs. One vocabulary, one meaning per
+  // context, rather than a second flag that means almost the same thing.
+  const targets =
+    paragraphsRaw !== undefined
+      ? paragraphSet("--paragraphs", paragraphsRaw, USAGE)
+      : [intArg("--cell-para") ?? 0];
+  const oob = targets.filter((t) => t >= paras.length);
+  if (oob.length) {
+    fail(
+      EXIT.NOT_FOUND,
+      `error: cell paragraph ${oob.join(", ")} out of range — this cell has ${paras.length} ` +
+        `(valid 0..${paras.length - 1}). Run --op list with the same cell address to see them.`,
+    );
+  }
+
+  const before = [];
+  for (const cp of targets) {
+    try {
+      before.push(
+        op === "char"
+          ? JSON.parse(doc.getCellCharPropertiesAt(addr.section, addr.paragraph, addr.control, addr.cell, cp, 0))
+          : JSON.parse(doc.getCellParaPropertiesAt(addr.section, addr.paragraph, addr.control, addr.cell, cp)),
+      );
+    } catch {
+      before.push(null);
+    }
+  }
+
+  const applied = [];
+  for (const [i, cp] of targets.entries()) {
+    // Character formatting on an EMPTY paragraph is a silent no-op (rule 62),
+    // and inside a cell that is easy to hit because empty spacer paragraphs are
+    // common. Refuse rather than report a success that did nothing.
+    if (op === "char" && paras[cp].length === 0) {
+      fail(
+        EXIT.USAGE,
+        `error: cell paragraph ${cp} is empty; character formatting on it is silently ignored ` +
+          `by the engine. Use --op para for a paragraph-level property, or pick a paragraph with text.`,
+      );
+    }
+    let r;
+    try {
+      r =
+        op === "char"
+          ? JSON.parse(
+              doc.applyCharFormatInCell(
+                addr.section, addr.paragraph, addr.control, addr.cell, cp,
+                Number.isInteger(start) ? start : 0,
+                Number.isInteger(end) ? end : paras[cp].length,
+                propsRaw,
+              ),
+            )
+          : JSON.parse(
+              doc.applyParaFormatInCell(addr.section, addr.paragraph, addr.control, addr.cell, cp, propsRaw),
+            );
+    } catch (e) {
+      fail(EXIT.CORRUPTION, `error: cell paragraph ${cp}: ${e?.message ?? e}`);
+    }
+    if (!r || r.ok !== true) {
+      fail(EXIT.CORRUPTION, `error: engine reported failure for cell paragraph ${cp}: ${JSON.stringify(r)}`);
+    }
+    applied.push({ cellPara: cp, beforeIndex: i });
+  }
+
+  let cResult;
+  try {
+    cResult = await exportVerify(doc, output, {});
+  } catch (e) {
+    fail(EXIT.CORRUPTION, `error: export/verify failed: ${e?.message ?? e}`);
+  }
+  if (!cResult.verified) {
+    process.stderr.write(JSON.stringify(cResult) + "\n");
+    fail(EXIT.CORRUPTION, `error: round-trip verification failed — ${output} did not reload cleanly.`);
+  }
+
+  // Confirm from the SAVED file, per paragraph — the same contract the body
+  // path keeps. The engine answers ok:true for properties it ignores.
+  const back = await loadDocument(cResult.outputPath);
+  const effects = [];
+  const dead = [];
+  for (const { cellPara: cp, beforeIndex } of applied) {
+    let after = null;
+    try {
+      after =
+        op === "char"
+          ? JSON.parse(back.getCellCharPropertiesAt(addr.section, addr.paragraph, addr.control, addr.cell, cp, 0))
+          : JSON.parse(back.getCellParaPropertiesAt(addr.section, addr.paragraph, addr.control, addr.cell, cp));
+    } catch { /* fall through to a no-effect verdict */ }
+    const eff = {};
+    for (const [k, want] of Object.entries(props)) {
+      eff[k] = classifyEffect(k, want, before[beforeIndex], after);
+      if (eff[k] === "no-effect") dead.push(`cell paragraph ${cp}: "${k}"`);
+    }
+    effects.push({ cellPara: cp, effect: eff });
+  }
+  if (dead.length) {
+    process.stdout.write(JSON.stringify({ ...cResult, effects }) + "\n");
+    fail(
+      EXIT.CORRUPTION,
+      `error: the formatting did NOT take on disk for ${dead.join(", ")}.\n` +
+        `       The engine reported success. Do not deliver ${output}.`,
+    );
+  }
+
+  process.stdout.write(
+    JSON.stringify({
+      ok: true,
+      op,
+      target: "cell",
+      cell: addr,
+      cellParagraphs: targets,
+      props,
+      effects,
+      verified: true,
+      bytesWritten: cResult.bytesWritten,
+      outputPath: cResult.outputPath,
+    }) + "\n",
+  );
+  process.exit(EXIT.OK);
 }
 
 // --- --op bullet -------------------------------------------------------------
