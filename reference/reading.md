@@ -144,4 +144,6 @@ Paragraph properties apply per paragraph, so an alignment set on the second line
 
 So a cell whose text is ambiguous now carries the counts: `cellParagraphs` is how many it really has, `softBreaks` how many newlines are inside a paragraph rather than between two. Unambiguous cells carry neither, so the signal is not buried in noise. `format.mjs --op list` with a cell address says it in words — `[57 LINES IN ONE PARAGRAPH — --op split-lines first]`.
 
+**Do not read INDENTATION off this flattened text either.** The repo's standing warning — never read table *data* off flattened text — is about records, and the same flattening misleads about formatting in a different way: leading whitespace you see here may be literal spaces, or the line may be flush with a `marginLeft` underneath it, and the two are indistinguishable in the string. A reader who treats the spaces as ground truth concludes the fix is "strip the stray spaces" when the real difference is which mechanism carries the depth. Check `format.mjs --op list` with a cell address before treating this text as the basis for a formatting decision.
+
 **`softBreaks > 0` means per-line formatting is impossible until you split.** See `reference/editing.md` for `--op split-lines`.

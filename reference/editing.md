@@ -53,7 +53,7 @@ Address the table by `--table N` (the index `extract_tables` prints) or by `--se
 
 `--op char` does not need `--start`/`--end` here; the range defaults to the whole cell paragraph, since you already named the paragraph. Character formatting on an **empty** cell paragraph is refused rather than silently ignored — form cells are full of empty spacers, and the engine returns success for that.
 
-`--op bullet` and `--op indent` do **not** accept a cell address yet and say so rather than quietly editing a body paragraph instead. For a bulleted list inside a cell, use `--op para` with the properties directly.
+**Which ops take a cell address:** `--op list`, `--op char`, `--op para`, `--op split-lines` and `--op indent` do. **`--op bullet` does not** — given one it says so rather than quietly editing a body paragraph instead. For a bulleted list inside a cell, use `--op para` with the properties directly.
 
 #### `--op split-lines` — when a cell paragraph is really many lines
 
@@ -78,7 +78,7 @@ format.mjs <in> --op indent --section 0 --paragraph 6 --control 0 --cell 20 --by
 
 A paragraph that still carries leading spaces is not used as a donor — it is half-converted, and spreading a half-applied convention is worse than stopping.
 
-It prints what it learned on stderr, so the inference is auditable rather than silent. With nothing to learn from — no paragraph carrying both a glyph and a `marginLeft` — it **refuses** (exit 3) and says to format one by hand first, because inventing a convention would be worse than declining.
+It prints what it learned on stderr AND returns it as `learned` in the JSON result, so the inference is auditable both by a person reading the run and by a caller checking the output — including which path it took, since `learned` naming a shape id is the evidence it pointed at the donor rather than copying values. With nothing to learn from — no paragraph carrying both a glyph and a `marginLeft` — it **refuses** (exit 3) and says to format one by hand first, because inventing a convention would be worse than declining.
 
 ### `format.mjs --op char` / `--op para` — the `--props` vocabulary
 

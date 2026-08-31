@@ -304,6 +304,15 @@ test("indent --by-marker: learns the convention already in the cell and matches 
     "--cell", "0", "--by-marker", "--output", dst]);
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stderr, /learned from this cell/, "it says what it learned, so the guess is auditable");
+  // And machine-readably. A caller checking that this took the SAFE path needs
+  // it in the result, not only in prose: `learned` naming a shape id is the
+  // evidence it pointed at the donor rather than copying values (spec rule 71).
+  const report = JSON.parse(r.stdout);
+  assert.ok(Array.isArray(report.learned), "the learned mapping is in the JSON result");
+  for (const entry of report.learned) {
+    assert.equal(typeof entry.glyph, "string");
+    assert.equal(typeof entry.paraShapeId, "number", "it names a SHAPE, not a marginLeft");
+  }
 
   // Every paragraph with a given glyph must share the DONOR'S SHAPE ID, not
   // merely a matching marginLeft.

@@ -474,6 +474,11 @@ if (inCell) {
     };
 
     let plan = [];
+    // Carried into the JSON result, not only printed. A caller checking whether
+    // this took the safe path needs it machine-readable: `learned` naming a
+    // SHAPE ID is the evidence it pointed at the donor rather than copying
+    // values, which is the distinction spec rule 71 is about.
+    let learnedReport = null;
     if (byMarker) {
       // Learn the DONOR SHAPE, not the numbers.
       //
@@ -517,6 +522,7 @@ if (inCell) {
             `       Format one by hand first, or set the levels explicitly with --level and --paragraphs.`,
         );
       }
+      learnedReport = [...learned].map(([glyph, paraShapeId]) => ({ glyph, paraShapeId }));
       process.stderr.write(
         `learned from this cell: ` +
           [...learned].map(([g, id]) => `"${g}" → paragraph shape ${id}`).join(", ") +
@@ -628,6 +634,7 @@ if (inCell) {
         target: "cell",
         cell: addr,
         mode: byMarker ? "by-marker" : "level",
+        ...(learnedReport ? { learned: learnedReport } : {}),
         changed: plan.map((s) => ({
           cellPara: s.cellPara,
           glyph: s.glyph,
