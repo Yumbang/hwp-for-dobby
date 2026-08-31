@@ -89,6 +89,7 @@ const USAGE =
   "       format.mjs <input> --op indent --section N --paragraphs 6-9 --level N " +
   "[--scheme auto|space|margin] [--no-hanging] --output <out.hwp>\n" +
   "       format.mjs <input> --op list [--section N] [--format text|json]   (read-only, no --output)\n" +
+  "       format.mjs <input> --op split-lines --table N --cell N --paragraphs N   (cell only)\n" +
   "  IN A TABLE CELL: add (--table N | --section N --paragraph N --control N) and (--cell N | --row R --col C).\n" +
   "  --paragraphs then addresses the paragraphs INSIDE that cell.";
 
@@ -132,6 +133,7 @@ const cellIdx = intArg("--cell");
 const cellRow = intArg("--row");
 const cellCol = intArg("--col");
 const cellControl = intArg("--control");
+const byMarker = flag("--by-marker");
 
 if (flag("-h") || flag("--help")) {
   process.stdout.write(USAGE + "\n");
@@ -144,13 +146,14 @@ if (op !== "list" && !output) fail(EXIT.USAGE, USAGE);
 if (op === "list" && output) {
   fail(EXIT.USAGE, `error: --op list is read-only and writes no document; drop --output\n${USAGE}`);
 }
-if (op !== "char" && op !== "para" && op !== "bullet" && op !== "indent" && op !== "list")
-  fail(EXIT.USAGE, `error: --op must be 'char', 'para', 'bullet', 'indent' or 'list'\n${USAGE}`);
-if (op !== "list" && !inCell && (!Number.isInteger(section) || section < 0))
+const OPS = ["char", "para", "bullet", "indent", "list", "split-lines"];
+if (!OPS.includes(op))
+  fail(EXIT.USAGE, `error: --op must be one of ${OPS.join(", ")}\n${USAGE}`);
+if (op !== "list" && op !== "split-lines" && !inCell && (!Number.isInteger(section) || section < 0))
   fail(EXIT.USAGE, `error: --section must be a non-negative integer\n${USAGE}`);
 if (op === "list" && section !== undefined && (!Number.isInteger(section) || section < 0))
   fail(EXIT.USAGE, `error: --section must be a non-negative integer\n${USAGE}`);
-if (op !== "bullet" && op !== "indent" && op !== "list") {
+if (op !== "bullet" && op !== "indent" && op !== "list" && op !== "split-lines") {
   // With a cell address, --paragraph names the paragraph HOSTING the table and
   // is resolved by lib/cell_addr (or supplied by --table), so it is not
   // required here; the target paragraphs are inside the cell.
@@ -163,7 +166,7 @@ if (op !== "bullet" && op !== "indent" && op !== "list") {
 // bullet takes --paragraphs (a set), and either a --char to set or --remove.
 let bulletTargets = null;
 let bulletGlyph = null;
-if (op === "bullet") {
+if (op === "bullet" && !inCell) {
   bulletTargets = paragraphSet("--paragraphs", paragraphsRaw, USAGE);
   if (bulletRemove) {
     if (bulletChar !== undefined) {
@@ -189,7 +192,9 @@ if (op === "bullet") {
 
 // indent takes the same paragraph set as bullet, plus a required --level.
 let indentTargets = null;
-if (op === "indent") {
+// In a cell the branch below resolves its own targets — --by-marker takes none
+// at all, since it learns which paragraphs to touch from the cell itself.
+if (op === "indent" && !inCell) {
   indentTargets = paragraphSet("--paragraphs", paragraphsRaw, USAGE);
   if (bulletLevel === undefined) {
     fail(EXIT.USAGE, `error: --op indent requires --level N (0 is the outermost level)\n${USAGE}`);
@@ -225,7 +230,7 @@ if (op === "char" && !inCell) {
 // --op bullet and --op indent carry no --props: their vocabulary is
 // --char/--level/--mode and --level/--scheme respectively.
 let props;
-if (op !== "bullet" && op !== "indent" && op !== "list") {
+if (op !== "bullet" && op !== "indent" && op !== "list" && op !== "split-lines") {
   try {
     props = JSON.parse(propsRaw);
   } catch (e) {
@@ -335,11 +340,265 @@ if (inCell) {
     process.exit(EXIT.OK);
   }
 
+  // --- --op split-lines: turn one blob paragraph into real paragraphs -------
+  //
+  // A cell paragraph can hold many logical lines separated by U+000A — the
+  // soft break Shift+Enter produces. On a real 성과요약 form one cell paragraph
+  // held 4,555 characters across 57 such lines, which is why "the whole thing
+  // is treated as one chunk" is the symptom people report. Formatting cannot
+  // help there: paragraph properties apply to the paragraph, so 57 lines
+  // sharing one paragraph share one indent whether that suits them or not.
+  //
+  // Splitting is done from the LAST newline backwards, for the same reason
+  // lib/blocks.mjs splices in descending order: an earlier offset stays valid
+  // while later ones are consumed. The engine leaves the newline at the START
+  // of the new paragraph, so it is deleted after each split.
+  if (op === "split-lines") {
+    const addr = resolveCellAddress(
+      doc,
+      { table: cellTable, section, paragraph, control: cellControl, cell: cellIdx, row: cellRow, col: cellCol },
+      USAGE,
+    );
+    const paras = cellParagraphs(doc, addr);
+    const targets =
+      paragraphsRaw !== undefined
+        ? paragraphSet("--paragraphs", paragraphsRaw, USAGE)
+        : paras.map((x) => x.cellPara);
+    const oob = targets.filter((t) => t >= paras.length);
+    if (oob.length) {
+      fail(EXIT.NOT_FOUND, `error: cell paragraph ${oob.join(", ")} out of range (cell has ${paras.length})`);
+    }
+    // Highest paragraph first, so splitting one does not renumber another that
+    // has not been handled yet.
+    const ordered = [...targets].sort((a, b) => b - a);
+    const report = [];
+    for (const cp of ordered) {
+      const text = paras[cp].text;
+      const offsets = [];
+      for (let i = 0; i < text.length; i++) if (text[i] === "\n") offsets.push(i);
+      if (offsets.length === 0) {
+        report.push({ cellPara: cp, lines: 1, split: 0 });
+        continue;
+      }
+      for (let i = offsets.length - 1; i >= 0; i--) {
+        const at = offsets[i];
+        let r;
+        try {
+          r = JSON.parse(doc.splitParagraphInCell(addr.section, addr.paragraph, addr.control, addr.cell, cp, at));
+        } catch (e) {
+          fail(EXIT.CORRUPTION, `error: split failed in cell paragraph ${cp} at ${at}: ${e?.message ?? e}`);
+        }
+        if (!r || r.ok !== true) {
+          fail(EXIT.CORRUPTION, `error: engine refused the split at ${at}: ${JSON.stringify(r)}`);
+        }
+        // The newline survives at the head of the new paragraph; drop it.
+        const made = r.cellParaIndex;
+        try {
+          doc.deleteTextInCell(addr.section, addr.paragraph, addr.control, addr.cell, made, 0, 1);
+        } catch {
+          /* a paragraph that will not give up its newline is left as-is rather
+             than failing the whole run; the confirmation below will show it */
+        }
+      }
+      report.push({ cellPara: cp, lines: offsets.length + 1, split: offsets.length });
+    }
+
+    let sResult;
+    try {
+      sResult = await exportVerify(doc, output, {});
+    } catch (e) {
+      fail(EXIT.CORRUPTION, `error: export/verify failed: ${e?.message ?? e}`);
+    }
+    if (!sResult.verified) {
+      process.stderr.write(JSON.stringify(sResult) + "\n");
+      fail(EXIT.CORRUPTION, `error: round-trip verification failed — ${output} did not reload cleanly.`);
+    }
+    const back = await loadDocument(sResult.outputPath);
+    const afterCount = back.getCellParagraphCount(addr.section, addr.paragraph, addr.control, addr.cell);
+    const expected = paras.length + report.reduce((a, r) => a + r.split, 0);
+    if (afterCount !== expected) {
+      fail(
+        EXIT.CORRUPTION,
+        `error: expected ${expected} cell paragraphs after splitting, found ${afterCount} on disk.`,
+      );
+    }
+    // No text may be lost — only the newlines that became paragraph breaks.
+    const joined = cellParagraphs(back, addr)
+      .map((x) => x.text)
+      .join("\n");
+    const originalJoined = paras.map((x) => x.text).join("\n");
+    if (joined.replace(/\n/g, "") !== originalJoined.replace(/\n/g, "")) {
+      fail(EXIT.CORRUPTION, `error: the split changed the cell's text. Do not deliver ${output}.`);
+    }
+    process.stdout.write(
+      JSON.stringify({
+        ok: true,
+        op: "split-lines",
+        cell: addr,
+        paragraphs: report,
+        cellParagraphs: { before: paras.length, after: afterCount },
+        verified: true,
+        outputPath: sResult.outputPath,
+      }) + "\n",
+    );
+    process.exit(EXIT.OK);
+  }
+
+  if (op === "indent") {
+    // Cell indent. --by-marker is the "match what is already there" mode: it
+    // LEARNS the glyph→marginLeft mapping from cell paragraphs that already
+    // carry one, then applies it to the paragraphs that do not. That is what
+    // "make the rest match" means on a document somebody has already started
+    // formatting by hand, and it beats asking them to restate a convention the
+    // document is already carrying.
+    const addr = resolveCellAddress(
+      doc,
+      { table: cellTable, section, paragraph, control: cellControl, cell: cellIdx, row: cellRow, col: cellCol },
+      USAGE,
+    );
+    const paras = cellParagraphs(doc, addr);
+    const shapeOf = (cp) => {
+      try {
+        return JSON.parse(
+          doc.getCellParaPropertiesAt(addr.section, addr.paragraph, addr.control, addr.cell, cp),
+        );
+      } catch {
+        return {};
+      }
+    };
+
+    let plan = [];
+    if (byMarker) {
+      // Learn: for each marker glyph, the most common non-zero marginLeft.
+      const votes = new Map();
+      for (const x of paras) {
+        const m = parseMarker(x.text);
+        if (!m) continue;
+        const ml = shapeOf(x.cellPara).marginLeft;
+        if (!(ml > 0)) continue;
+        if (!votes.has(m.glyph)) votes.set(m.glyph, new Map());
+        const v = votes.get(m.glyph);
+        v.set(ml, (v.get(ml) ?? 0) + 1);
+      }
+      const learned = new Map();
+      for (const [glyph, v] of votes) {
+        const [best] = [...v].sort((a, b) => b[1] - a[1]);
+        learned.set(glyph, best[0]);
+      }
+      if (learned.size === 0) {
+        fail(
+          EXIT.NOT_FOUND,
+          `error: --by-marker found no already-formatted paragraph to learn from in this cell.\n` +
+            `       It needs at least one paragraph that has BOTH a marker glyph and marginLeft > 0.\n` +
+            `       Format one by hand first, or set the levels explicitly with --level and --paragraphs.`,
+        );
+      }
+      process.stderr.write(
+        `learned from this cell: ` +
+          [...learned].map(([g, ml]) => `"${g}" → marginLeft ${ml}`).join(", ") +
+          `\n`,
+      );
+      for (const x of paras) {
+        const m = parseMarker(x.text);
+        if (!m || !learned.has(m.glyph)) continue;
+        const want = learned.get(m.glyph);
+        const cur = shapeOf(x.cellPara).marginLeft;
+        // The getter divides by 150 (spec rule 66), so send HWPUNIT back.
+        if (Math.abs((cur ?? 0) - want) < 0.05 && m.indent.length === 0) continue; // already matches
+        plan.push({ cellPara: x.cellPara, glyph: m.glyph, marginLeft: Math.round(want * 150), stripSpaces: m.indent.length });
+      }
+      if (plan.length === 0) {
+        process.stdout.write(
+          JSON.stringify({ ok: true, op: "indent", target: "cell", cell: addr, changed: [], note: "everything already matches", verified: true }) + "\n",
+        );
+        process.exit(EXIT.OK);
+      }
+    } else {
+      if (bulletLevel === undefined) {
+        fail(EXIT.USAGE, `error: --op indent in a cell needs --level N, or --by-marker to copy what is already there\n${USAGE}`);
+      }
+      const targets =
+        paragraphsRaw !== undefined ? paragraphSet("--paragraphs", paragraphsRaw, USAGE) : paras.map((x) => x.cellPara);
+      for (const cp of targets) {
+        if (cp >= paras.length) fail(EXIT.NOT_FOUND, `error: cell paragraph ${cp} out of range (cell has ${paras.length})`);
+        const m = parseMarker(paras[cp].text);
+        plan.push({
+          cellPara: cp,
+          glyph: m?.glyph ?? null,
+          marginLeft: marginForLevel(bulletLevel, undefined),
+          stripSpaces: m?.indent.length ?? 0,
+        });
+      }
+    }
+
+    for (const step of plan) {
+      // The convention being matched puts depth in marginLeft and keeps the
+      // text flush, so any leading spaces are removed rather than left to add
+      // a second, competing indent.
+      if (step.stripSpaces > 0) {
+        try {
+          doc.deleteTextInCell(addr.section, addr.paragraph, addr.control, addr.cell, step.cellPara, 0, step.stripSpaces);
+        } catch (e) {
+          fail(EXIT.CORRUPTION, `error: could not strip leading spaces on cell paragraph ${step.cellPara}: ${e?.message ?? e}`);
+        }
+      }
+      let r;
+      try {
+        r = JSON.parse(
+          doc.applyParaFormatInCell(
+            addr.section, addr.paragraph, addr.control, addr.cell, step.cellPara,
+            JSON.stringify({ marginLeft: step.marginLeft }),
+          ),
+        );
+      } catch (e) {
+        fail(EXIT.CORRUPTION, `error: indent failed on cell paragraph ${step.cellPara}: ${e?.message ?? e}`);
+      }
+      if (!r || r.ok !== true) {
+        fail(EXIT.CORRUPTION, `error: engine reported failure on cell paragraph ${step.cellPara}: ${JSON.stringify(r)}`);
+      }
+    }
+
+    let iResult;
+    try {
+      iResult = await exportVerify(doc, output, {});
+    } catch (e) {
+      fail(EXIT.CORRUPTION, `error: export/verify failed: ${e?.message ?? e}`);
+    }
+    if (!iResult.verified) {
+      process.stderr.write(JSON.stringify(iResult) + "\n");
+      fail(EXIT.CORRUPTION, `error: round-trip verification failed — ${output} did not reload cleanly.`);
+    }
+    const back = await loadDocument(iResult.outputPath);
+    const bad = [];
+    for (const step of plan) {
+      const got = JSON.parse(
+        back.getCellParaPropertiesAt(addr.section, addr.paragraph, addr.control, addr.cell, step.cellPara),
+      ).marginLeft;
+      if (!(got > 0)) bad.push(`cell paragraph ${step.cellPara} (marginLeft reads ${got})`);
+    }
+    if (bad.length) {
+      fail(EXIT.CORRUPTION, `error: the indent did NOT take on disk for ${bad.join(", ")}. Do not deliver ${output}.`);
+    }
+    process.stdout.write(
+      JSON.stringify({
+        ok: true,
+        op: "indent",
+        target: "cell",
+        cell: addr,
+        mode: byMarker ? "by-marker" : "level",
+        changed: plan.map((s) => ({ cellPara: s.cellPara, glyph: s.glyph, marginLeft: s.marginLeft, strippedSpaces: s.stripSpaces })),
+        verified: true,
+        outputPath: iResult.outputPath,
+      }) + "\n",
+    );
+    process.exit(EXIT.OK);
+  }
+
   if (op !== "char" && op !== "para") {
     fail(
       EXIT.USAGE,
-      `error: --op ${op} does not support cell addressing yet; --op char and --op para do.\n` +
-        `       For bullets and indents inside a cell, use --op para with the props directly.\n${USAGE}`,
+      `error: --op ${op} does not support cell addressing yet; --op char, --op para, ` +
+        `--op indent and --op split-lines do.\n${USAGE}`,
     );
   }
 

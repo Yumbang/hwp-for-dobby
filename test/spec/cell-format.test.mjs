@@ -172,9 +172,9 @@ test("cell: a merged-away position points at the origin that holds the text", as
 });
 
 test("cell: ops that do not support cell addressing say so rather than ignoring it", () => {
-  for (const op of ["bullet", "indent"]) {
+  for (const op of ["bullet"]) {
     const r = run([FIX, "--op", op, ...TABLE, "--cell", "0", "--paragraphs", "0",
-      ...(op === "bullet" ? ["--char", "○"] : ["--level", "1"]),
+      "--char", "○",
       "--output", at(`unsupported-${op}.hwp`)]);
     assert.equal(r.status, 2, `--op ${op} with a cell address must not silently target the body`);
     assert.match(r.stderr, /does not support cell addressing/);
@@ -193,4 +193,138 @@ test("cell: body-paragraph formatting is unchanged when no cell is addressed", a
   assert.equal(j.target, undefined, "the body path does not claim a cell target");
   const back = await loadDocument(dst);
   assert.equal(JSON.parse(back.getParaPropertiesAt(0, 1)).alignment, "center");
+});
+
+// ── --op split-lines and --op indent --by-marker ──────────────────────────
+//
+// Both come from one real document. A 성과요약 form had a cell paragraph
+// holding 4,555 characters across 57 lines separated by U+000A — the soft
+// break Shift+Enter makes. That is the "it is all treated as one chunk"
+// symptom: paragraph properties apply per paragraph, so 57 lines sharing one
+// paragraph share one indent whether that suits them or not. The author had
+// hand-formatted the first few (◦ at marginLeft 14.1, - at 27.4) and wanted
+// the rest to match.
+
+// The table's control index is NOT 0: every section's first paragraph carries
+// invisible SectionDef/ColumnDef controls at offset 0, so a freshly created
+// table lands after them. Assuming 0 is the documented trap (spec rule 7) and
+// it is what this helper got wrong first time — the engine answers
+// "지정된 컨트롤이 표, 글상자 또는 그림이 아닙니다".
+let LINES_CTRL = 0;
+
+async function cellWithLines() {
+  // A cell paragraph carrying several logical lines, built the way the real
+  // document does it: one paragraph, newlines inside.
+  const { emptyDocument } = await import("../../src/lib/_bootstrap.mjs");
+  const { tableControlsInParagraph } = await import("../../src/lib/doc_walk.mjs");
+  const { writeFileSync } = await import("node:fs");
+  const d = await emptyDocument();
+  d.createTable(0, 0, 0, 1, 1);
+  const ctrls = tableControlsInParagraph(d, 0, 0);
+  assert.ok(ctrls.length > 0, "the table must be findable by probe, not by assumption");
+  LINES_CTRL = ctrls[0];
+  const blob = ["◦ 첫째 항목", "  - 딸린 설명 하나", "  - 딸린 설명 둘", "◦ 둘째 항목", "  - 딸린 설명 셋"].join("\n");
+  d.insertTextInCell(0, 0, LINES_CTRL, 0, 0, 0, blob);
+  const path = at("lines.hwp");
+  writeFileSync(path, Buffer.from(d.exportHwp()));
+  return path;
+}
+
+test("split-lines: one blob paragraph becomes one paragraph per line", async () => {
+  const src = await cellWithLines();
+  const doc = await loadDocument(src);
+  const addr = resolveCellAddress(doc, { section: 0, paragraph: 0, control: LINES_CTRL, cell: 0 });
+  const before = cellParagraphs(doc, addr);
+  const blob = before.find((x) => x.text.includes("\n"));
+  assert.ok(blob, "precondition: a paragraph with embedded newlines");
+
+  const dst = at("split.hwp");
+  const r = run([src, "--op", "split-lines", "--section", "0", "--paragraph", "0", "--control", String(LINES_CTRL),
+    "--cell", "0", "--paragraphs", String(blob.cellPara), "--output", dst]);
+  assert.equal(r.status, 0, r.stderr);
+
+  const back = await loadDocument(dst);
+  const after = cellParagraphs(back, addr);
+  assert.equal(after.length, before.length + 4, "five lines become five paragraphs");
+  for (const x of after) {
+    assert.ok(!x.text.includes("\n"), "no paragraph still carries a line break");
+    assert.ok(!x.text.startsWith("\n"), "and none begins with the break it was split at");
+  }
+});
+
+test("split-lines: no text is lost, only the breaks become boundaries", async () => {
+  const src = await cellWithLines();
+  const doc = await loadDocument(src);
+  const addr = resolveCellAddress(doc, { section: 0, paragraph: 0, control: LINES_CTRL, cell: 0 });
+  const beforeText = cellParagraphs(doc, addr).map((x) => x.text).join("").replace(/\n/g, "");
+
+  const dst = at("split2.hwp");
+  assert.equal(
+    run([src, "--op", "split-lines", "--section", "0", "--paragraph", "0", "--control", String(LINES_CTRL),
+      "--cell", "0", "--output", dst]).status,
+    0,
+  );
+  const back = await loadDocument(dst);
+  const afterText = cellParagraphs(back, addr).map((x) => x.text).join("").replace(/\n/g, "");
+  assert.equal(afterText, beforeText, "the characters are identical, only the breaks moved");
+});
+
+test("indent --by-marker: learns the convention already in the cell and matches the rest", async () => {
+  const src = await cellWithLines();
+  const split = at("bm-split.hwp");
+  assert.equal(
+    run([src, "--op", "split-lines", "--section", "0", "--paragraph", "0", "--control", String(LINES_CTRL),
+      "--cell", "0", "--output", split]).status,
+    0,
+  );
+  // Hand-format ONE paragraph of each kind, as the document's author had.
+  const doc = await loadDocument(split);
+  const addr = resolveCellAddress(doc, { section: 0, paragraph: 0, control: LINES_CTRL, cell: 0 });
+  const paras = cellParagraphs(doc, addr);
+  const firstCircle = paras.find((x) => x.text.trimStart().startsWith("◦"));
+  const firstDash = paras.find((x) => x.text.trimStart().startsWith("-"));
+  assert.ok(firstCircle && firstDash, "precondition");
+
+  const seeded = at("bm-seed.hwp");
+  const { writeFileSync } = await import("node:fs");
+  doc.applyParaFormatInCell(0, 0, LINES_CTRL, 0, firstCircle.cellPara, JSON.stringify({ marginLeft: 2115 }));
+  doc.applyParaFormatInCell(0, 0, LINES_CTRL, 0, firstDash.cellPara, JSON.stringify({ marginLeft: 4110 }));
+  writeFileSync(seeded, Buffer.from(doc.exportHwp()));
+
+  const dst = at("bm.hwp");
+  const r = run([seeded, "--op", "indent", "--section", "0", "--paragraph", "0", "--control", String(LINES_CTRL),
+    "--cell", "0", "--by-marker", "--output", dst]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stderr, /learned from this cell/, "it says what it learned, so the guess is auditable");
+
+  // Every paragraph with a given glyph now shares one marginLeft, and none
+  // keeps the leading spaces that would add a second, competing indent.
+  const back = await loadDocument(dst);
+  const { parseMarker } = await import("../../src/lib/bullets.mjs");
+  const byGlyph = new Map();
+  for (const x of cellParagraphs(back, addr)) {
+    const m = parseMarker(x.text);
+    if (!m) continue;
+    const ml = JSON.parse(back.getCellParaPropertiesAt(0, 0, LINES_CTRL, 0, x.cellPara)).marginLeft;
+    if (!byGlyph.has(m.glyph)) byGlyph.set(m.glyph, new Set());
+    byGlyph.get(m.glyph).add(`${ml}/${m.indent.length}`);
+    assert.equal(m.indent.length, 0, "leading spaces are removed, depth lives in marginLeft");
+  }
+  for (const [glyph, variants] of byGlyph) {
+    assert.equal(variants.size, 1, `every "${glyph}" must end up identical, got ${[...variants].join(", ")}`);
+  }
+});
+
+test("indent --by-marker: refuses when there is nothing to learn from", async () => {
+  const src = await cellWithLines();
+  const split = at("bm-empty.hwp");
+  run([src, "--op", "split-lines", "--section", "0", "--paragraph", "0", "--control", String(LINES_CTRL),
+    "--cell", "0", "--output", split]);
+  // Nothing in the cell carries marginLeft, so there is no convention to copy.
+  const r = run([split, "--op", "indent", "--section", "0", "--paragraph", "0", "--control", String(LINES_CTRL),
+    "--cell", "0", "--by-marker", "--output", at("bm-none.hwp")]);
+  assert.equal(r.status, 3, "guessing a convention out of nothing would be worse than refusing");
+  assert.match(r.stderr, /found no already-formatted paragraph to learn from/);
+  assert.match(r.stderr, /Format one by hand first/, "and it says how to proceed");
+  assert.equal(existsSync(at("bm-none.hwp")), false);
 });

@@ -55,6 +55,27 @@ Address the table by `--table N` (the index `extract_tables` prints) or by `--se
 
 `--op bullet` and `--op indent` do **not** accept a cell address yet and say so rather than quietly editing a body paragraph instead. For a bulleted list inside a cell, use `--op para` with the properties directly.
 
+#### `--op split-lines` — when a cell paragraph is really many lines
+
+A cell paragraph can hold many logical lines separated by `U+000A`, the soft break Shift+Enter produces. On a real 성과요약 form, one cell paragraph held **4,555 characters across 57 lines**. That is what "the whole thing is treated as one chunk" actually is, and formatting cannot help while it lasts: paragraph properties apply per paragraph, so 57 lines sharing one paragraph share one indent.
+
+```
+format.mjs <in> --op split-lines --section 0 --paragraph 6 --control 0 --cell 20 --paragraphs 5 --output out.hwp
+```
+
+Splitting runs from the last break backwards, so earlier offsets stay valid — the same reason `lib/blocks.mjs` splices in descending order. The engine leaves the newline at the head of the new paragraph, so it is removed. The command refuses to deliver if the cell's characters changed, since only the breaks should have become boundaries.
+
+#### `--op indent --by-marker` — match what is already there
+
+After splitting, the new paragraphs still carry the old convention. `--by-marker` **learns the mapping from the cell itself**: for each marker glyph it takes the most common `marginLeft` among paragraphs that already have one, then applies it to the ones that do not, stripping leading spaces so the text is flush and depth lives in `marginLeft` alone.
+
+```
+format.mjs <in> --op indent --section 0 --paragraph 6 --control 0 --cell 20 --by-marker --output out.hwp
+  → learned from this cell: "◦" → marginLeft 14.1, "-" → marginLeft 27.4
+```
+
+It prints what it learned on stderr, so the inference is auditable rather than silent. With nothing to learn from — no paragraph carrying both a glyph and a `marginLeft` — it **refuses** (exit 3) and says to format one by hand first, because inventing a convention would be worse than declining.
+
 ### `format.mjs --op char` / `--op para` — the `--props` vocabulary
 
 `--op char` needs an explicit `--start`/`--end`; there is no whole-paragraph
