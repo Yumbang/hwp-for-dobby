@@ -475,21 +475,39 @@ if (inCell) {
 
     let plan = [];
     if (byMarker) {
-      // Learn: for each marker glyph, the most common non-zero marginLeft.
+      // Learn the DONOR SHAPE, not the numbers.
+      //
+      // The first version of this copied marginLeft, and rhwp then reported the
+      // copy as identical to the original — same marginLeft, same indent, same
+      // everything it surfaces. Hancom disagreed: the copied paragraphs were
+      // indented further than their donors and their long lines ran past the
+      // cell's right edge and were clipped mid-word. The cell had ended up with
+      // FIVE paragraph shapes where three were intended, because
+      // applyParaFormatInCell mints a new shape rather than reusing one, and
+      // the minted shape carried something rhwp does not report.
+      //
+      // So matching a convention means pointing at the SAME SHAPE, not
+      // reproducing the values the getter happens to expose. setCellParaShapeId
+      // does that, and it cannot drift: a paragraph sharing a shape with one
+      // Hancom already renders correctly renders the same way by construction.
+      // Equal reported values are not equal shapes — that is the whole lesson.
       const votes = new Map();
       for (const x of paras) {
         const m = parseMarker(x.text);
         if (!m) continue;
-        const ml = shapeOf(x.cellPara).marginLeft;
-        if (!(ml > 0)) continue;
+        const sh = shapeOf(x.cellPara);
+        // A donor has to be already formatted AND already flush: copying the
+        // shape of a paragraph that still carries leading spaces would spread
+        // a half-applied convention.
+        if (!(sh.marginLeft > 0) || m.indent.length > 0) continue;
         if (!votes.has(m.glyph)) votes.set(m.glyph, new Map());
         const v = votes.get(m.glyph);
-        v.set(ml, (v.get(ml) ?? 0) + 1);
+        v.set(sh.paraShapeId, (v.get(sh.paraShapeId) ?? 0) + 1);
       }
       const learned = new Map();
       for (const [glyph, v] of votes) {
         const [best] = [...v].sort((a, b) => b[1] - a[1]);
-        learned.set(glyph, best[0]);
+        learned.set(glyph, best[0]); // a paraShapeId, not a marginLeft
       }
       if (learned.size === 0) {
         fail(
@@ -501,17 +519,16 @@ if (inCell) {
       }
       process.stderr.write(
         `learned from this cell: ` +
-          [...learned].map(([g, ml]) => `"${g}" → marginLeft ${ml}`).join(", ") +
+          [...learned].map(([g, id]) => `"${g}" → paragraph shape ${id}`).join(", ") +
           `\n`,
       );
       for (const x of paras) {
         const m = parseMarker(x.text);
         if (!m || !learned.has(m.glyph)) continue;
         const want = learned.get(m.glyph);
-        const cur = shapeOf(x.cellPara).marginLeft;
-        // The getter divides by 150 (spec rule 66), so send HWPUNIT back.
-        if (Math.abs((cur ?? 0) - want) < 0.05 && m.indent.length === 0) continue; // already matches
-        plan.push({ cellPara: x.cellPara, glyph: m.glyph, marginLeft: Math.round(want * 150), stripSpaces: m.indent.length });
+        const cur = shapeOf(x.cellPara).paraShapeId;
+        if (cur === want && m.indent.length === 0) continue; // already matches
+        plan.push({ cellPara: x.cellPara, glyph: m.glyph, shapeId: want, stripSpaces: m.indent.length });
       }
       if (plan.length === 0) {
         process.stdout.write(
@@ -550,12 +567,22 @@ if (inCell) {
       }
       let r;
       try {
-        r = JSON.parse(
-          doc.applyParaFormatInCell(
-            addr.section, addr.paragraph, addr.control, addr.cell, step.cellPara,
-            JSON.stringify({ marginLeft: step.marginLeft }),
-          ),
-        );
+        r =
+          step.shapeId !== undefined
+            ? // Point at an existing shape rather than minting one — see the
+              // note above learned/donor. This is what keeps Hancom's rendering
+              // identical to the donor's instead of merely similar.
+              JSON.parse(
+                doc.setCellParaShapeId(
+                  addr.section, addr.paragraph, addr.control, addr.cell, step.cellPara, step.shapeId,
+                ),
+              )
+            : JSON.parse(
+                doc.applyParaFormatInCell(
+                  addr.section, addr.paragraph, addr.control, addr.cell, step.cellPara,
+                  JSON.stringify({ marginLeft: step.marginLeft }),
+                ),
+              );
       } catch (e) {
         fail(EXIT.CORRUPTION, `error: indent failed on cell paragraph ${step.cellPara}: ${e?.message ?? e}`);
       }
@@ -579,8 +606,17 @@ if (inCell) {
     for (const step of plan) {
       const got = JSON.parse(
         back.getCellParaPropertiesAt(addr.section, addr.paragraph, addr.control, addr.cell, step.cellPara),
-      ).marginLeft;
-      if (!(got > 0)) bad.push(`cell paragraph ${step.cellPara} (marginLeft reads ${got})`);
+      );
+      // For a shape copy, the SHAPE ID is the thing to confirm. Checking
+      // marginLeft instead is what let the first version pass while Hancom
+      // rendered it wrong: the numbers matched and the shapes did not.
+      if (step.shapeId !== undefined) {
+        if (got.paraShapeId !== step.shapeId) {
+          bad.push(`cell paragraph ${step.cellPara} (shape ${got.paraShapeId}, wanted ${step.shapeId})`);
+        }
+      } else if (!(got.marginLeft > 0)) {
+        bad.push(`cell paragraph ${step.cellPara} (marginLeft reads ${got.marginLeft})`);
+      }
     }
     if (bad.length) {
       fail(EXIT.CORRUPTION, `error: the indent did NOT take on disk for ${bad.join(", ")}. Do not deliver ${output}.`);
@@ -592,7 +628,12 @@ if (inCell) {
         target: "cell",
         cell: addr,
         mode: byMarker ? "by-marker" : "level",
-        changed: plan.map((s) => ({ cellPara: s.cellPara, glyph: s.glyph, marginLeft: s.marginLeft, strippedSpaces: s.stripSpaces })),
+        changed: plan.map((s) => ({
+          cellPara: s.cellPara,
+          glyph: s.glyph,
+          ...(s.shapeId !== undefined ? { paraShapeId: s.shapeId } : { marginLeft: s.marginLeft }),
+          strippedSpaces: s.stripSpaces,
+        })),
         verified: true,
         outputPath: iResult.outputPath,
       }) + "\n",

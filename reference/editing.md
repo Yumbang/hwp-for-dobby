@@ -74,6 +74,10 @@ format.mjs <in> --op indent --section 0 --paragraph 6 --control 0 --cell 20 --by
   → learned from this cell: "◦" → marginLeft 14.1, "-" → marginLeft 27.4
 ```
 
+**It copies the paragraph SHAPE, not the numbers.** `applyParaFormatInCell` *mints* a new paragraph shape rather than reusing one, and a minted shape can carry something rhwp does not report: a first version of this copied `marginLeft`, rhwp reported the copies as identical to their donors, and **Hancom rendered them further right with long lines running past the cell edge and clipping mid-word**. The cell had five paragraph shapes where three were intended. `setCellParaShapeId` points at the donor instead, so a matched paragraph renders identically to it by construction. Equal reported values are not equal shapes.
+
+A paragraph that still carries leading spaces is not used as a donor — it is half-converted, and spreading a half-applied convention is worse than stopping.
+
 It prints what it learned on stderr, so the inference is auditable rather than silent. With nothing to learn from — no paragraph carrying both a glyph and a `marginLeft` — it **refuses** (exit 3) and says to format one by hand first, because inventing a convention would be worse than declining.
 
 ### `format.mjs --op char` / `--op para` — the `--props` vocabulary

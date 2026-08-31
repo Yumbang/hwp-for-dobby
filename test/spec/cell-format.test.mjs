@@ -287,8 +287,16 @@ test("indent --by-marker: learns the convention already in the cell and matches 
 
   const seeded = at("bm-seed.hwp");
   const { writeFileSync } = await import("node:fs");
-  doc.applyParaFormatInCell(0, 0, LINES_CTRL, 0, firstCircle.cellPara, JSON.stringify({ marginLeft: 2115 }));
-  doc.applyParaFormatInCell(0, 0, LINES_CTRL, 0, firstDash.cellPara, JSON.stringify({ marginLeft: 4110 }));
+  // Seed the way a person formatting by hand actually leaves it: leading
+  // spaces removed and the depth in the paragraph shape. A donor that still
+  // carries spaces is half-converted, and --by-marker deliberately refuses to
+  // copy from one — spreading a half-applied convention is worse than
+  // stopping.
+  for (const [para, ml] of [[firstCircle, 2115], [firstDash, 4110]]) {
+    const lead = /^ */.exec(para.text)[0].length;
+    if (lead) doc.deleteTextInCell(0, 0, LINES_CTRL, 0, para.cellPara, 0, lead);
+    doc.applyParaFormatInCell(0, 0, LINES_CTRL, 0, para.cellPara, JSON.stringify({ marginLeft: ml }));
+  }
   writeFileSync(seeded, Buffer.from(doc.exportHwp()));
 
   const dst = at("bm.hwp");
@@ -297,21 +305,43 @@ test("indent --by-marker: learns the convention already in the cell and matches 
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stderr, /learned from this cell/, "it says what it learned, so the guess is auditable");
 
-  // Every paragraph with a given glyph now shares one marginLeft, and none
-  // keeps the leading spaces that would add a second, competing indent.
+  // Every paragraph with a given glyph must share the DONOR'S SHAPE ID, not
+  // merely a matching marginLeft.
+  //
+  // This assertion was weaker once and the weakness shipped a broken document.
+  // applyParaFormatInCell MINTS a paragraph shape rather than reusing one, so
+  // copying the numbers produced a cell with five shapes where three were
+  // intended. rhwp reported the minted shapes as identical to their donors —
+  // same marginLeft, same indent — and Hancom rendered them further right, with
+  // long lines running past the cell edge and clipping mid-word. Equal reported
+  // values are not equal shapes, and only the shape id can tell them apart.
   const back = await loadDocument(dst);
   const { parseMarker } = await import("../../src/lib/bullets.mjs");
+  const shapeOf = (cp) => JSON.parse(back.getCellParaPropertiesAt(0, 0, LINES_CTRL, 0, cp)).paraShapeId;
+  const donorShape = { "◦": shapeOf(firstCircle.cellPara), "-": shapeOf(firstDash.cellPara) };
   const byGlyph = new Map();
   for (const x of cellParagraphs(back, addr)) {
     const m = parseMarker(x.text);
     if (!m) continue;
-    const ml = JSON.parse(back.getCellParaPropertiesAt(0, 0, LINES_CTRL, 0, x.cellPara)).marginLeft;
     if (!byGlyph.has(m.glyph)) byGlyph.set(m.glyph, new Set());
-    byGlyph.get(m.glyph).add(`${ml}/${m.indent.length}`);
-    assert.equal(m.indent.length, 0, "leading spaces are removed, depth lives in marginLeft");
+    byGlyph.get(m.glyph).add(shapeOf(x.cellPara));
+    assert.equal(m.indent.length, 0, "leading spaces are removed, depth lives in the shape");
+    if (donorShape[m.glyph] !== undefined) {
+      assert.equal(
+        shapeOf(x.cellPara),
+        donorShape[m.glyph],
+        `"${m.glyph}" at cp${x.cellPara} must POINT AT the donor's shape, not a copy of its values`,
+      );
+    }
   }
-  for (const [glyph, variants] of byGlyph) {
-    assert.equal(variants.size, 1, `every "${glyph}" must end up identical, got ${[...variants].join(", ")}`);
+  for (const [glyph, shapes] of byGlyph) {
+    assert.equal(shapes.size, 1, `every "${glyph}" must share one shape, got ${[...shapes].join(", ")}`);
+  }
+  // And no new shape was minted for them at all.
+  const all = new Set(cellParagraphs(back, addr).map((x) => shapeOf(x.cellPara)));
+  const before = new Set(cellParagraphs(await loadDocument(seeded), addr).map((x) => shapeOf(x.cellPara)));
+  for (const id of all) {
+    assert.ok(before.has(id), `shape ${id} was minted; matching must reuse what is already there`);
   }
 });
 
