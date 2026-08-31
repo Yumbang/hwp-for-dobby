@@ -309,10 +309,12 @@ if (inCell) {
           );
         } catch { /* same */ }
       }
+      const softBreaks = (cp.text.match(/\n/g) ?? []).length;
       return {
         cellPara: cp.cellPara,
         length: cp.length,
         text: cp.text,
+        ...(softBreaks > 0 ? { softBreaks } : {}),
         alignment: pp.alignment,
         indent: pp.indent,
         marginLeft: pp.marginLeft,
@@ -331,7 +333,11 @@ if (inCell) {
             .map(
               (r) =>
                 `  cp${String(r.cellPara).padStart(3)} len=${String(r.length).padStart(4)} ` +
-                `${(r.alignment ?? "?").padEnd(8)} ${r.bold ? "B" : "-"} ${JSON.stringify(r.text.slice(0, 46))}`,
+                `${(r.alignment ?? "?").padEnd(8)} ${r.bold ? "B" : "-"} ` +
+                (r.softBreaks
+                  ? `[${r.softBreaks + 1} LINES IN ONE PARAGRAPH — --op split-lines first] `
+                  : "") +
+                `${JSON.stringify(r.text.slice(0, 46))}`,
             )
             .join("\n") +
           "\n",
@@ -468,22 +474,45 @@ if (inCell) {
     };
 
     let plan = [];
+    // Carried into the JSON result, not only printed. A caller checking whether
+    // this took the safe path needs it machine-readable: `learned` naming a
+    // SHAPE ID is the evidence it pointed at the donor rather than copying
+    // values, which is the distinction spec rule 71 is about.
+    let learnedReport = null;
     if (byMarker) {
-      // Learn: for each marker glyph, the most common non-zero marginLeft.
+      // Learn the DONOR SHAPE, not the numbers.
+      //
+      // The first version of this copied marginLeft, and rhwp then reported the
+      // copy as identical to the original — same marginLeft, same indent, same
+      // everything it surfaces. Hancom disagreed: the copied paragraphs were
+      // indented further than their donors and their long lines ran past the
+      // cell's right edge and were clipped mid-word. The cell had ended up with
+      // FIVE paragraph shapes where three were intended, because
+      // applyParaFormatInCell mints a new shape rather than reusing one, and
+      // the minted shape carried something rhwp does not report.
+      //
+      // So matching a convention means pointing at the SAME SHAPE, not
+      // reproducing the values the getter happens to expose. setCellParaShapeId
+      // does that, and it cannot drift: a paragraph sharing a shape with one
+      // Hancom already renders correctly renders the same way by construction.
+      // Equal reported values are not equal shapes — that is the whole lesson.
       const votes = new Map();
       for (const x of paras) {
         const m = parseMarker(x.text);
         if (!m) continue;
-        const ml = shapeOf(x.cellPara).marginLeft;
-        if (!(ml > 0)) continue;
+        const sh = shapeOf(x.cellPara);
+        // A donor has to be already formatted AND already flush: copying the
+        // shape of a paragraph that still carries leading spaces would spread
+        // a half-applied convention.
+        if (!(sh.marginLeft > 0) || m.indent.length > 0) continue;
         if (!votes.has(m.glyph)) votes.set(m.glyph, new Map());
         const v = votes.get(m.glyph);
-        v.set(ml, (v.get(ml) ?? 0) + 1);
+        v.set(sh.paraShapeId, (v.get(sh.paraShapeId) ?? 0) + 1);
       }
       const learned = new Map();
       for (const [glyph, v] of votes) {
         const [best] = [...v].sort((a, b) => b[1] - a[1]);
-        learned.set(glyph, best[0]);
+        learned.set(glyph, best[0]); // a paraShapeId, not a marginLeft
       }
       if (learned.size === 0) {
         fail(
@@ -493,19 +522,19 @@ if (inCell) {
             `       Format one by hand first, or set the levels explicitly with --level and --paragraphs.`,
         );
       }
+      learnedReport = [...learned].map(([glyph, paraShapeId]) => ({ glyph, paraShapeId }));
       process.stderr.write(
         `learned from this cell: ` +
-          [...learned].map(([g, ml]) => `"${g}" → marginLeft ${ml}`).join(", ") +
+          [...learned].map(([g, id]) => `"${g}" → paragraph shape ${id}`).join(", ") +
           `\n`,
       );
       for (const x of paras) {
         const m = parseMarker(x.text);
         if (!m || !learned.has(m.glyph)) continue;
         const want = learned.get(m.glyph);
-        const cur = shapeOf(x.cellPara).marginLeft;
-        // The getter divides by 150 (spec rule 66), so send HWPUNIT back.
-        if (Math.abs((cur ?? 0) - want) < 0.05 && m.indent.length === 0) continue; // already matches
-        plan.push({ cellPara: x.cellPara, glyph: m.glyph, marginLeft: Math.round(want * 150), stripSpaces: m.indent.length });
+        const cur = shapeOf(x.cellPara).paraShapeId;
+        if (cur === want && m.indent.length === 0) continue; // already matches
+        plan.push({ cellPara: x.cellPara, glyph: m.glyph, shapeId: want, stripSpaces: m.indent.length });
       }
       if (plan.length === 0) {
         process.stdout.write(
@@ -544,12 +573,22 @@ if (inCell) {
       }
       let r;
       try {
-        r = JSON.parse(
-          doc.applyParaFormatInCell(
-            addr.section, addr.paragraph, addr.control, addr.cell, step.cellPara,
-            JSON.stringify({ marginLeft: step.marginLeft }),
-          ),
-        );
+        r =
+          step.shapeId !== undefined
+            ? // Point at an existing shape rather than minting one — see the
+              // note above learned/donor. This is what keeps Hancom's rendering
+              // identical to the donor's instead of merely similar.
+              JSON.parse(
+                doc.setCellParaShapeId(
+                  addr.section, addr.paragraph, addr.control, addr.cell, step.cellPara, step.shapeId,
+                ),
+              )
+            : JSON.parse(
+                doc.applyParaFormatInCell(
+                  addr.section, addr.paragraph, addr.control, addr.cell, step.cellPara,
+                  JSON.stringify({ marginLeft: step.marginLeft }),
+                ),
+              );
       } catch (e) {
         fail(EXIT.CORRUPTION, `error: indent failed on cell paragraph ${step.cellPara}: ${e?.message ?? e}`);
       }
@@ -573,8 +612,17 @@ if (inCell) {
     for (const step of plan) {
       const got = JSON.parse(
         back.getCellParaPropertiesAt(addr.section, addr.paragraph, addr.control, addr.cell, step.cellPara),
-      ).marginLeft;
-      if (!(got > 0)) bad.push(`cell paragraph ${step.cellPara} (marginLeft reads ${got})`);
+      );
+      // For a shape copy, the SHAPE ID is the thing to confirm. Checking
+      // marginLeft instead is what let the first version pass while Hancom
+      // rendered it wrong: the numbers matched and the shapes did not.
+      if (step.shapeId !== undefined) {
+        if (got.paraShapeId !== step.shapeId) {
+          bad.push(`cell paragraph ${step.cellPara} (shape ${got.paraShapeId}, wanted ${step.shapeId})`);
+        }
+      } else if (!(got.marginLeft > 0)) {
+        bad.push(`cell paragraph ${step.cellPara} (marginLeft reads ${got.marginLeft})`);
+      }
     }
     if (bad.length) {
       fail(EXIT.CORRUPTION, `error: the indent did NOT take on disk for ${bad.join(", ")}. Do not deliver ${output}.`);
@@ -586,9 +634,206 @@ if (inCell) {
         target: "cell",
         cell: addr,
         mode: byMarker ? "by-marker" : "level",
-        changed: plan.map((s) => ({ cellPara: s.cellPara, glyph: s.glyph, marginLeft: s.marginLeft, strippedSpaces: s.stripSpaces })),
+        ...(learnedReport ? { learned: learnedReport } : {}),
+        changed: plan.map((s) => ({
+          cellPara: s.cellPara,
+          glyph: s.glyph,
+          ...(s.shapeId !== undefined ? { paraShapeId: s.shapeId } : { marginLeft: s.marginLeft }),
+          strippedSpaces: s.stripSpaces,
+        })),
         verified: true,
         outputPath: iResult.outputPath,
+      }) + "\n",
+    );
+    process.exit(EXIT.OK);
+  }
+
+  // --- --op bullet in a cell: the GLYPH, and deliberately nothing else ------
+  //
+  // The body path sets the glyph AND the depth together, because there the two
+  // travel as one convention (leading spaces plus a hanging indent). In a cell
+  // they do not. Real cells carry depth in marginLeft, and changing paragraph
+  // geometry through applyParaFormatInCell MINTS a paragraph shape — which
+  // rhwp reports as identical to its donor and Hancom renders differently
+  // (spec rule 71). So this path edits the marker as TEXT, which was measured
+  // to leave paraShapeId untouched, and refuses --level rather than
+  // reintroducing that bug.
+  //
+  // Depth in a cell belongs to `--op indent --by-marker`, which points at an
+  // existing shape instead of minting one. Setting the glyph here and matching
+  // the depth there composes; doing both here would not be safe.
+  if (op === "bullet") {
+    const addr = resolveCellAddress(
+      doc,
+      { table: cellTable, section, paragraph, control: cellControl, cell: cellIdx, row: cellRow, col: cellCol },
+      USAGE,
+    );
+    // The body path's validation is skipped for cells, so the glyph is checked
+    // here — including the guards that keep a non-string out of the engine.
+    if (bulletRemove) {
+      if (bulletChar !== undefined) {
+        fail(EXIT.USAGE, `error: --remove and --char are mutually exclusive\n${USAGE}`);
+      }
+    } else {
+      if (bulletChar === undefined) {
+        fail(
+          EXIT.USAGE,
+          `error: --op bullet requires --char '<glyph>' (or --remove).\n` +
+            `       Common 개조식 glyphs, outermost first: ${BULLET_GLYPHS.slice(0, 8).join(" ")}\n${USAGE}`,
+        );
+      }
+      bulletGlyph = assertBulletChar(bulletChar);
+    }
+    if (bulletLevel !== undefined) {
+      fail(
+        EXIT.USAGE,
+        `error: --op bullet in a cell does not take --level.\n` +
+          `       Depth inside a cell is carried by the paragraph shape, and setting it here would\n` +
+          `       mint a new shape that Hancom renders differently from its donor (spec rule 71).\n` +
+          `       Set the glyph here, then match the depth with:\n` +
+          `         --op indent --by-marker   (copies an existing paragraph's shape)\n${USAGE}`,
+      );
+    }
+    if (bulletMode !== undefined && bulletMode !== "text" && bulletMode !== "auto") {
+      fail(
+        EXIT.USAGE,
+        `error: --op bullet in a cell supports --mode text only (got ${JSON.stringify(bulletMode)}).\n` +
+          `       HWP's own bullet feature is a paragraph property, so applying it here would mint\n` +
+          `       a shape for the same reason --level is refused.\n${USAGE}`,
+      );
+    }
+
+    const paras = cellParagraphs(doc, addr);
+    // Without --paragraphs, act only on paragraphs that ALREADY carry a marker.
+    // "Change the bullets in this cell" means the bullets; defaulting to every
+    // paragraph would put a glyph in front of headers and prose, which is a
+    // bigger change than was asked for. Adding a marker where there was none
+    // stays possible — it just has to be named.
+    const targets =
+      paragraphsRaw !== undefined
+        ? paragraphSet("--paragraphs", paragraphsRaw, USAGE)
+        : paras.filter((x) => parseMarker(x.text)).map((x) => x.cellPara);
+    const oob = targets.filter((t) => t >= paras.length);
+    if (oob.length) {
+      fail(EXIT.NOT_FOUND, `error: cell paragraph ${oob.join(", ")} out of range (cell has ${paras.length})`);
+    }
+    if (targets.length === 0) {
+      fail(
+        EXIT.NOT_FOUND,
+        `error: no paragraph in this cell carries a marker, so there is nothing to change.\n` +
+          `       To ADD markers, name the paragraphs: --paragraphs 1,2,4\n` +
+          `       Run --op list with this cell address to see them.`,
+      );
+    }
+
+    const changes = [];
+    const hwpBulleted = [];
+    for (const cp of targets) {
+      const text = paras[cp].text;
+      const existing = parseMarker(text);
+      // An HWP headType bullet is a paragraph property; clearing it would mint
+      // a shape, so it is reported rather than silently left OR silently
+      // changed. Saying nothing would be the untrue-success this repo keeps
+      // closing.
+      try {
+        const pp = JSON.parse(
+          doc.getCellParaPropertiesAt(addr.section, addr.paragraph, addr.control, addr.cell, cp),
+        );
+        if (pp.headType === "Bullet") hwpBulleted.push(cp);
+      } catch {
+        /* a paragraph that will not answer simply does not report */
+      }
+
+      if (bulletRemove) {
+        if (!existing) {
+          changes.push({ cellPara: cp, removed: null });
+          continue;
+        }
+        doc.deleteTextInCell(addr.section, addr.paragraph, addr.control, addr.cell, cp, 0, existing.prefixLength);
+        changes.push({ cellPara: cp, removed: existing.glyph });
+        continue;
+      }
+
+      // Replace just the glyph, keeping the caller's existing leading
+      // whitespace and gap. Rewriting the whole prefix would change the depth
+      // as a side effect, which is the thing this path is careful not to do.
+      if (existing) {
+        if (existing.glyph === bulletGlyph) {
+          changes.push({ cellPara: cp, glyph: bulletGlyph, replaced: existing.glyph, unchanged: true });
+          continue;
+        }
+        const at = existing.indent.length;
+        doc.deleteTextInCell(addr.section, addr.paragraph, addr.control, addr.cell, cp, at, existing.glyph.length);
+        doc.insertTextInCell(addr.section, addr.paragraph, addr.control, addr.cell, cp, at, bulletGlyph);
+        changes.push({ cellPara: cp, glyph: bulletGlyph, replaced: existing.glyph });
+      } else {
+        if (paras[cp].length === 0) {
+          changes.push({ cellPara: cp, skipped: "empty paragraph" });
+          continue;
+        }
+        doc.insertTextInCell(addr.section, addr.paragraph, addr.control, addr.cell, cp, 0, `${bulletGlyph} `);
+        changes.push({ cellPara: cp, glyph: bulletGlyph, replaced: null });
+      }
+    }
+
+    let bResult;
+    try {
+      bResult = await exportVerify(doc, output, {});
+    } catch (e) {
+      fail(EXIT.CORRUPTION, `error: export/verify failed: ${e?.message ?? e}`);
+    }
+    if (!bResult.verified) {
+      process.stderr.write(JSON.stringify(bResult) + "\n");
+      fail(EXIT.CORRUPTION, `error: round-trip verification failed — ${output} did not reload cleanly.`);
+    }
+
+    // Confirm from the saved file, and confirm the thing this path promises
+    // NOT to change: the paragraph shape must be untouched.
+    const back = await loadDocument(bResult.outputPath);
+    const backParas = cellParagraphs(back, addr);
+    const bad = [];
+    for (const ch of changes) {
+      if (ch.skipped) continue;
+      const t = backParas[ch.cellPara]?.text ?? "";
+      const m = parseMarker(t);
+      if (bulletRemove) {
+        if (ch.removed && m) bad.push(`cell paragraph ${ch.cellPara} still has a marker`);
+      } else if (!m || m.glyph !== bulletGlyph) {
+        bad.push(`cell paragraph ${ch.cellPara} is ${m ? `"${m.glyph}"` : "unmarked"}, wanted "${bulletGlyph}"`);
+      }
+      const beforeShape = JSON.parse(
+        doc.getCellParaPropertiesAt(addr.section, addr.paragraph, addr.control, addr.cell, ch.cellPara),
+      ).paraShapeId;
+      const afterShape = JSON.parse(
+        back.getCellParaPropertiesAt(addr.section, addr.paragraph, addr.control, addr.cell, ch.cellPara),
+      ).paraShapeId;
+      if (beforeShape !== afterShape) {
+        bad.push(`cell paragraph ${ch.cellPara} changed paragraph shape (${beforeShape} → ${afterShape})`);
+      }
+    }
+    if (bad.length) {
+      fail(EXIT.CORRUPTION, `error: ${bad.join("; ")}. Do not deliver ${output}.`);
+    }
+    if (hwpBulleted.length) {
+      process.stderr.write(
+        `WARNING: cell paragraph ${hwpBulleted.join(", ")} also carries HWP's own bullet ` +
+          `(headType "Bullet"). Only the typed glyph was changed — clearing headType is a paragraph ` +
+          `property and would mint a new shape, which Hancom may render differently (spec rule 71).\n`,
+      );
+    }
+
+    process.stdout.write(
+      JSON.stringify({
+        ok: true,
+        op: "bullet",
+        target: "cell",
+        cell: addr,
+        mode: "text",
+        ...(bulletRemove ? { removed: true } : { char: bulletGlyph }),
+        changes,
+        ...(hwpBulleted.length ? { hwpBulletedUntouched: hwpBulleted } : {}),
+        verified: true,
+        outputPath: bResult.outputPath,
       }) + "\n",
     );
     process.exit(EXIT.OK);
@@ -598,7 +843,7 @@ if (inCell) {
     fail(
       EXIT.USAGE,
       `error: --op ${op} does not support cell addressing yet; --op char, --op para, ` +
-        `--op indent and --op split-lines do.\n${USAGE}`,
+        `--op bullet, --op indent and --op split-lines do.\n${USAGE}`,
     );
   }
 

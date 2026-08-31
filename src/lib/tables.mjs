@@ -77,13 +77,38 @@ export function cellParaText(doc, loc, k, cp, len) {
 // A cell holds one or more inner paragraphs and there is no whole-cell getter,
 // so read each paragraph and join with newline. NFC per spec §21.
 export function readCellText(doc, loc, k) {
+  return readCellStructure(doc, loc, k).text;
+}
+
+// The same read, plus the structure the flattened text destroys.
+//
+// WHY THIS EXISTS. `readCellText` joins a cell's paragraphs with "\n", and a
+// SOFT line break inside one paragraph is also "\n". So these two cells are
+// byte-identical in the output and completely different to edit:
+//
+//   three paragraphs           -> "가\n나\n다"
+//   one paragraph, two breaks  -> "가\n나\n다"
+//
+// Paragraph properties apply per paragraph, so alignment or an indent set on
+// the second is either one line or all three depending on which of those it
+// is — and nothing in the output said which. On a real 성과요약 form that
+// ambiguity hid a cell paragraph holding 4,555 characters across 57 lines, and
+// reading the document carefully led to exactly the wrong conclusion: that the
+// lines were paragraphs and formatting them individually should work.
+//
+// So the counts travel with the text. `paragraphs` is how many the cell really
+// has; `softBreaks` is how many of the newlines are inside a paragraph rather
+// than between two. A cell with softBreaks > 0 is one where `format.mjs
+// --op split-lines` is the prerequisite for per-line formatting.
+export function readCellStructure(doc, loc, k) {
   let n = 0;
   try {
     n = cellParaCount(doc, loc, k);
   } catch {
-    return "";
+    return { text: "", paragraphs: 0, softBreaks: 0 };
   }
   const parts = [];
+  let softBreaks = 0;
   for (let cp = 0; cp < n; cp++) {
     let len = 0;
     try {
@@ -91,9 +116,11 @@ export function readCellText(doc, loc, k) {
     } catch {
       len = 0;
     }
-    parts.push(len > 0 ? cellParaText(doc, loc, k, cp, len) : "");
+    const t = len > 0 ? cellParaText(doc, loc, k, cp, len) : "";
+    for (const ch of t) if (ch === "\n") softBreaks++;
+    parts.push(t);
   }
-  return parts.join("\n").normalize("NFC");
+  return { text: parts.join("\n").normalize("NFC"), paragraphs: n, softBreaks };
 }
 
 // ── grid reconstruction ────────────────────────────────────────────────────
@@ -120,6 +147,10 @@ export function buildGrid(cells, rowCount, colCount, { fillMerged = false, mapTe
             rowSpan: c.rowSpan,
             colSpan: c.colSpan,
             origin: true,
+            // Only where the flattened text is ambiguous — see readCellStructure.
+            ...(c.cellParagraphs !== undefined
+              ? { cellParagraphs: c.cellParagraphs, softBreaks: c.softBreaks }
+              : {}),
             ...(c.nestedTables && c.nestedTables.length ? { nestedTables: c.nestedTables } : {}),
           };
         } else {
@@ -183,7 +214,19 @@ export function extractTables(doc, opts = {}) {
       } catch {
         break; // defensive: malformed table — keep what we have
       }
-      cells.push({ k, ...info, text: readCellText(doc, loc, k), nestedTables: [] });
+      // Carry the paragraph structure, but only where it is AMBIGUOUS —
+      // a single-paragraph cell with no breaks has nothing to disclose, and
+      // adding the fields everywhere would bury the signal in noise.
+      const st = readCellStructure(doc, loc, k);
+      cells.push({
+        k,
+        ...info,
+        text: st.text,
+        ...(st.softBreaks > 0 || st.paragraphs > 1
+          ? { cellParagraphs: st.paragraphs, softBreaks: st.softBreaks }
+          : {}),
+        nestedTables: [],
+      });
     }
 
     // 2. discover nested tables per cell paragraph (parents-first order). No

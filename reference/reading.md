@@ -130,3 +130,20 @@ treat it as "unparsed", never as zero.
 Accurate text/markdown via the native CLI, with real table grids in markdown.
 Claude Code only; exits 4 elsewhere. Use when you need faithful markdown
 rendering rather than the WASM tier's paragraph walk.
+
+## A cell's newlines are two different things
+
+`extract_tables` joins a cell's paragraphs with `\n`, and a **soft line break** inside one paragraph is also `\n`. So these are byte-identical in the text and completely different to edit:
+
+```
+three paragraphs           →  "가\n나\n다"
+one paragraph, two breaks  →  "가\n나\n다"
+```
+
+Paragraph properties apply per paragraph, so an alignment set on the second line is either one line or all three depending on which of those it is. On a real 성과요약 form this hid a cell paragraph holding **4,555 characters across 57 lines**, and reading the document carefully produced exactly the wrong conclusion — that the lines were paragraphs, so formatting them individually should work. It could not, and nothing in the output said why.
+
+So a cell whose text is ambiguous now carries the counts: `cellParagraphs` is how many it really has, `softBreaks` how many newlines are inside a paragraph rather than between two. Unambiguous cells carry neither, so the signal is not buried in noise. `format.mjs --op list` with a cell address says it in words — `[57 LINES IN ONE PARAGRAPH — --op split-lines first]`.
+
+**Do not read INDENTATION off this flattened text either.** The repo's standing warning — never read table *data* off flattened text — is about records, and the same flattening misleads about formatting in a different way: leading whitespace you see here may be literal spaces, or the line may be flush with a `marginLeft` underneath it, and the two are indistinguishable in the string. A reader who treats the spaces as ground truth concludes the fix is "strip the stray spaces" when the real difference is which mechanism carries the depth. Check `format.mjs --op list` with a cell address before treating this text as the basis for a formatting decision.
+
+**`softBreaks > 0` means per-line formatting is impossible until you split.** See `reference/editing.md` for `--op split-lines`.

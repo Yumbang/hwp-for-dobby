@@ -265,8 +265,8 @@
       ],
       "status": 0,
       "stdout": {
-        "sha256": "3c554383e5c693aa2db5129c2c2f82722449e0a52ca59467b867af7794e0648e",
-        "length": 62732,
+        "sha256": "8f5a40cb6b781bffd8325111f90f2accb6bb95ce8af2f962555f37f2e3760d8b",
+        "length": 63848,
         "head": "{\n  \"input\": \"samples/fixture-table.hwp\",\n  \"sourceFormat\": \"hwp\",\n  \"tableCount\": 12,\n  \"tables\": [\n    {\n      \"index\": 0,\n      \"section\": 0,\n      \"paragraph\": 0,\n      \"controlIndex\": 2,\n      \"rowCount\": 1,\n      \"colCount\": 1,\n      \"cellCount\": 1,\n      \"grid\": [\n        [\n          {\n      ",
         "tail": "\": 1,\n            \"origin\": true\n          },\n          {\n            \"text\": \"△11,402\",\n            \"rowSpan\": 1,\n            \"colSpan\": 1,\n            \"origin\": true\n          }\n        ]\n      ],\n      \"placement\": \"inline\",\n      \"treatAsChar\": true,\n      \"textWrap\": \"TopAndBottom\"\n    }\n  ]\n}\n"
       },
