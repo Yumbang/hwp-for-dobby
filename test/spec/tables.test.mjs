@@ -247,3 +247,73 @@ test("rule 4: --data-tables-only is conservative — it does NOT drop the numeri
     "no real data table may be silently dropped by --data-tables-only on this fixture",
   );
 });
+
+// ── cell paragraph structure vs soft line breaks ──────────────────────────
+//
+// readCellText joins a cell's paragraphs with "\n", and a soft line break
+// INSIDE a paragraph is also "\n". Those two are byte-identical in the output
+// and completely different to edit, because paragraph properties apply per
+// paragraph. On a real 성과요약 form the ambiguity hid a cell paragraph holding
+// 4,555 characters across 57 lines, and reading the document carefully led to
+// the wrong conclusion — that the lines were paragraphs, so formatting them
+// individually should work. It could not, and nothing said why.
+
+test("cell structure: paragraphs and soft breaks are told apart", async () => {
+  const { emptyDocument } = await import("../../src/lib/_bootstrap.mjs");
+  const { tableControlsInParagraph } = await import("../../src/lib/doc_walk.mjs");
+  const { readCellStructure, readCellText, flatLoc } = await import("../../src/lib/tables.mjs");
+
+  const build = async (fill) => {
+    const d = await emptyDocument();
+    d.createTable(0, 0, 0, 1, 1);
+    // Not control 0: a section's first paragraph carries invisible
+    // SectionDef/ColumnDef controls ahead of it (spec rule 7).
+    const c = tableControlsInParagraph(d, 0, 0)[0];
+    fill(d, c);
+    return { doc: d, loc: flatLoc(0, 0, c) };
+  };
+
+  const three = await build((d, c) => {
+    d.insertTextInCell(0, 0, c, 0, 0, 0, "가");
+    d.splitParagraphInCell(0, 0, c, 0, 0, 1);
+    d.insertTextInCell(0, 0, c, 0, 1, 0, "나");
+    d.splitParagraphInCell(0, 0, c, 0, 1, 1);
+    d.insertTextInCell(0, 0, c, 0, 2, 0, "다");
+  });
+  const one = await build((d, c) => d.insertTextInCell(0, 0, c, 0, 0, 0, "가\n나\n다"));
+
+  // The text alone cannot tell them apart — that is the whole problem.
+  assert.equal(readCellText(three.doc, three.loc, 0), readCellText(one.doc, one.loc, 0));
+
+  const a = readCellStructure(three.doc, three.loc, 0);
+  const b = readCellStructure(one.doc, one.loc, 0);
+  assert.deepEqual(
+    { paragraphs: a.paragraphs, softBreaks: a.softBreaks },
+    { paragraphs: 3, softBreaks: 0 },
+    "three paragraphs, no breaks",
+  );
+  assert.deepEqual(
+    { paragraphs: b.paragraphs, softBreaks: b.softBreaks },
+    { paragraphs: 1, softBreaks: 2 },
+    "one paragraph carrying two breaks",
+  );
+});
+
+test("cell structure: the counts reach extract_tables' grid, but only when ambiguous", async () => {
+  const { emptyDocument } = await import("../../src/lib/_bootstrap.mjs");
+  const { tableControlsInParagraph } = await import("../../src/lib/doc_walk.mjs");
+  const { extractTables } = await import("../../src/lib/tables.mjs");
+  const d = await emptyDocument();
+  d.createTable(0, 0, 0, 1, 2);
+  const c = tableControlsInParagraph(d, 0, 0)[0];
+  d.insertTextInCell(0, 0, c, 0, 0, 0, "한 줄");            // unambiguous
+  d.insertTextInCell(0, 0, c, 1, 0, 0, "가\n나\n다");        // one paragraph, breaks
+
+  const [t] = extractTables(d, {});
+  const plain = t.grid[0][0];
+  const blob = t.grid[0][1];
+  assert.equal(plain.cellParagraphs, undefined, "a plain cell discloses nothing — no noise");
+  assert.equal(plain.softBreaks, undefined);
+  assert.equal(blob.cellParagraphs, 1, "the ambiguous one says how many paragraphs it really has");
+  assert.equal(blob.softBreaks, 2, "and how many newlines are inside one");
+});

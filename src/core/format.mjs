@@ -309,10 +309,12 @@ if (inCell) {
           );
         } catch { /* same */ }
       }
+      const softBreaks = (cp.text.match(/\n/g) ?? []).length;
       return {
         cellPara: cp.cellPara,
         length: cp.length,
         text: cp.text,
+        ...(softBreaks > 0 ? { softBreaks } : {}),
         alignment: pp.alignment,
         indent: pp.indent,
         marginLeft: pp.marginLeft,
@@ -331,7 +333,11 @@ if (inCell) {
             .map(
               (r) =>
                 `  cp${String(r.cellPara).padStart(3)} len=${String(r.length).padStart(4)} ` +
-                `${(r.alignment ?? "?").padEnd(8)} ${r.bold ? "B" : "-"} ${JSON.stringify(r.text.slice(0, 46))}`,
+                `${(r.alignment ?? "?").padEnd(8)} ${r.bold ? "B" : "-"} ` +
+                (r.softBreaks
+                  ? `[${r.softBreaks + 1} LINES IN ONE PARAGRAPH — --op split-lines first] `
+                  : "") +
+                `${JSON.stringify(r.text.slice(0, 46))}`,
             )
             .join("\n") +
           "\n",
