@@ -648,11 +648,202 @@ if (inCell) {
     process.exit(EXIT.OK);
   }
 
+  // --- --op bullet in a cell: the GLYPH, and deliberately nothing else ------
+  //
+  // The body path sets the glyph AND the depth together, because there the two
+  // travel as one convention (leading spaces plus a hanging indent). In a cell
+  // they do not. Real cells carry depth in marginLeft, and changing paragraph
+  // geometry through applyParaFormatInCell MINTS a paragraph shape — which
+  // rhwp reports as identical to its donor and Hancom renders differently
+  // (spec rule 71). So this path edits the marker as TEXT, which was measured
+  // to leave paraShapeId untouched, and refuses --level rather than
+  // reintroducing that bug.
+  //
+  // Depth in a cell belongs to `--op indent --by-marker`, which points at an
+  // existing shape instead of minting one. Setting the glyph here and matching
+  // the depth there composes; doing both here would not be safe.
+  if (op === "bullet") {
+    const addr = resolveCellAddress(
+      doc,
+      { table: cellTable, section, paragraph, control: cellControl, cell: cellIdx, row: cellRow, col: cellCol },
+      USAGE,
+    );
+    // The body path's validation is skipped for cells, so the glyph is checked
+    // here — including the guards that keep a non-string out of the engine.
+    if (bulletRemove) {
+      if (bulletChar !== undefined) {
+        fail(EXIT.USAGE, `error: --remove and --char are mutually exclusive\n${USAGE}`);
+      }
+    } else {
+      if (bulletChar === undefined) {
+        fail(
+          EXIT.USAGE,
+          `error: --op bullet requires --char '<glyph>' (or --remove).\n` +
+            `       Common 개조식 glyphs, outermost first: ${BULLET_GLYPHS.slice(0, 8).join(" ")}\n${USAGE}`,
+        );
+      }
+      bulletGlyph = assertBulletChar(bulletChar);
+    }
+    if (bulletLevel !== undefined) {
+      fail(
+        EXIT.USAGE,
+        `error: --op bullet in a cell does not take --level.\n` +
+          `       Depth inside a cell is carried by the paragraph shape, and setting it here would\n` +
+          `       mint a new shape that Hancom renders differently from its donor (spec rule 71).\n` +
+          `       Set the glyph here, then match the depth with:\n` +
+          `         --op indent --by-marker   (copies an existing paragraph's shape)\n${USAGE}`,
+      );
+    }
+    if (bulletMode !== undefined && bulletMode !== "text" && bulletMode !== "auto") {
+      fail(
+        EXIT.USAGE,
+        `error: --op bullet in a cell supports --mode text only (got ${JSON.stringify(bulletMode)}).\n` +
+          `       HWP's own bullet feature is a paragraph property, so applying it here would mint\n` +
+          `       a shape for the same reason --level is refused.\n${USAGE}`,
+      );
+    }
+
+    const paras = cellParagraphs(doc, addr);
+    // Without --paragraphs, act only on paragraphs that ALREADY carry a marker.
+    // "Change the bullets in this cell" means the bullets; defaulting to every
+    // paragraph would put a glyph in front of headers and prose, which is a
+    // bigger change than was asked for. Adding a marker where there was none
+    // stays possible — it just has to be named.
+    const targets =
+      paragraphsRaw !== undefined
+        ? paragraphSet("--paragraphs", paragraphsRaw, USAGE)
+        : paras.filter((x) => parseMarker(x.text)).map((x) => x.cellPara);
+    const oob = targets.filter((t) => t >= paras.length);
+    if (oob.length) {
+      fail(EXIT.NOT_FOUND, `error: cell paragraph ${oob.join(", ")} out of range (cell has ${paras.length})`);
+    }
+    if (targets.length === 0) {
+      fail(
+        EXIT.NOT_FOUND,
+        `error: no paragraph in this cell carries a marker, so there is nothing to change.\n` +
+          `       To ADD markers, name the paragraphs: --paragraphs 1,2,4\n` +
+          `       Run --op list with this cell address to see them.`,
+      );
+    }
+
+    const changes = [];
+    const hwpBulleted = [];
+    for (const cp of targets) {
+      const text = paras[cp].text;
+      const existing = parseMarker(text);
+      // An HWP headType bullet is a paragraph property; clearing it would mint
+      // a shape, so it is reported rather than silently left OR silently
+      // changed. Saying nothing would be the untrue-success this repo keeps
+      // closing.
+      try {
+        const pp = JSON.parse(
+          doc.getCellParaPropertiesAt(addr.section, addr.paragraph, addr.control, addr.cell, cp),
+        );
+        if (pp.headType === "Bullet") hwpBulleted.push(cp);
+      } catch {
+        /* a paragraph that will not answer simply does not report */
+      }
+
+      if (bulletRemove) {
+        if (!existing) {
+          changes.push({ cellPara: cp, removed: null });
+          continue;
+        }
+        doc.deleteTextInCell(addr.section, addr.paragraph, addr.control, addr.cell, cp, 0, existing.prefixLength);
+        changes.push({ cellPara: cp, removed: existing.glyph });
+        continue;
+      }
+
+      // Replace just the glyph, keeping the caller's existing leading
+      // whitespace and gap. Rewriting the whole prefix would change the depth
+      // as a side effect, which is the thing this path is careful not to do.
+      if (existing) {
+        if (existing.glyph === bulletGlyph) {
+          changes.push({ cellPara: cp, glyph: bulletGlyph, replaced: existing.glyph, unchanged: true });
+          continue;
+        }
+        const at = existing.indent.length;
+        doc.deleteTextInCell(addr.section, addr.paragraph, addr.control, addr.cell, cp, at, existing.glyph.length);
+        doc.insertTextInCell(addr.section, addr.paragraph, addr.control, addr.cell, cp, at, bulletGlyph);
+        changes.push({ cellPara: cp, glyph: bulletGlyph, replaced: existing.glyph });
+      } else {
+        if (paras[cp].length === 0) {
+          changes.push({ cellPara: cp, skipped: "empty paragraph" });
+          continue;
+        }
+        doc.insertTextInCell(addr.section, addr.paragraph, addr.control, addr.cell, cp, 0, `${bulletGlyph} `);
+        changes.push({ cellPara: cp, glyph: bulletGlyph, replaced: null });
+      }
+    }
+
+    let bResult;
+    try {
+      bResult = await exportVerify(doc, output, {});
+    } catch (e) {
+      fail(EXIT.CORRUPTION, `error: export/verify failed: ${e?.message ?? e}`);
+    }
+    if (!bResult.verified) {
+      process.stderr.write(JSON.stringify(bResult) + "\n");
+      fail(EXIT.CORRUPTION, `error: round-trip verification failed — ${output} did not reload cleanly.`);
+    }
+
+    // Confirm from the saved file, and confirm the thing this path promises
+    // NOT to change: the paragraph shape must be untouched.
+    const back = await loadDocument(bResult.outputPath);
+    const backParas = cellParagraphs(back, addr);
+    const bad = [];
+    for (const ch of changes) {
+      if (ch.skipped) continue;
+      const t = backParas[ch.cellPara]?.text ?? "";
+      const m = parseMarker(t);
+      if (bulletRemove) {
+        if (ch.removed && m) bad.push(`cell paragraph ${ch.cellPara} still has a marker`);
+      } else if (!m || m.glyph !== bulletGlyph) {
+        bad.push(`cell paragraph ${ch.cellPara} is ${m ? `"${m.glyph}"` : "unmarked"}, wanted "${bulletGlyph}"`);
+      }
+      const beforeShape = JSON.parse(
+        doc.getCellParaPropertiesAt(addr.section, addr.paragraph, addr.control, addr.cell, ch.cellPara),
+      ).paraShapeId;
+      const afterShape = JSON.parse(
+        back.getCellParaPropertiesAt(addr.section, addr.paragraph, addr.control, addr.cell, ch.cellPara),
+      ).paraShapeId;
+      if (beforeShape !== afterShape) {
+        bad.push(`cell paragraph ${ch.cellPara} changed paragraph shape (${beforeShape} → ${afterShape})`);
+      }
+    }
+    if (bad.length) {
+      fail(EXIT.CORRUPTION, `error: ${bad.join("; ")}. Do not deliver ${output}.`);
+    }
+    if (hwpBulleted.length) {
+      process.stderr.write(
+        `WARNING: cell paragraph ${hwpBulleted.join(", ")} also carries HWP's own bullet ` +
+          `(headType "Bullet"). Only the typed glyph was changed — clearing headType is a paragraph ` +
+          `property and would mint a new shape, which Hancom may render differently (spec rule 71).\n`,
+      );
+    }
+
+    process.stdout.write(
+      JSON.stringify({
+        ok: true,
+        op: "bullet",
+        target: "cell",
+        cell: addr,
+        mode: "text",
+        ...(bulletRemove ? { removed: true } : { char: bulletGlyph }),
+        changes,
+        ...(hwpBulleted.length ? { hwpBulletedUntouched: hwpBulleted } : {}),
+        verified: true,
+        outputPath: bResult.outputPath,
+      }) + "\n",
+    );
+    process.exit(EXIT.OK);
+  }
+
   if (op !== "char" && op !== "para") {
     fail(
       EXIT.USAGE,
       `error: --op ${op} does not support cell addressing yet; --op char, --op para, ` +
-        `--op indent and --op split-lines do.\n${USAGE}`,
+        `--op bullet, --op indent and --op split-lines do.\n${USAGE}`,
     );
   }
 

@@ -171,14 +171,22 @@ test("cell: a merged-away position points at the origin that holds the text", as
   assert.match(r.stderr, /origin cell/);
 });
 
-test("cell: ops that do not support cell addressing say so rather than ignoring it", () => {
-  for (const op of ["bullet"]) {
-    const r = run([FIX, "--op", op, ...TABLE, "--cell", "0", "--paragraphs", "0",
-      "--char", "○",
-      "--output", at(`unsupported-${op}.hwp`)]);
-    assert.equal(r.status, 2, `--op ${op} with a cell address must not silently target the body`);
-    assert.match(r.stderr, /does not support cell addressing/);
-    assert.equal(existsSync(at(`unsupported-${op}.hwp`)), false);
+test("cell: every op that takes a cell address uses it, none silently hits the body", async () => {
+  // The bug this guards: a cell-addressed command falling through to the body
+  // path and editing paragraph 0 of the document instead. It happened once,
+  // when the cell branch sat after --op bullet's branch.
+  const doc = await loadDocument(FIX);
+  const bodyBefore = doc.getParagraphLength(0, 1);
+  for (const [op, extra] of [
+    ["para", ["--props", '{"alignment":"center"}']],
+    ["char", ["--props", '{"bold":true}']],
+  ]) {
+    const dst = at(`addr-${op}.hwp`);
+    const r = run([FIX, "--op", op, ...TABLE, "--cell", "0", "--paragraphs", "0", ...extra, "--output", dst]);
+    assert.equal(r.status, 0, `--op ${op} in a cell: ${r.stderr}`);
+    assert.equal(JSON.parse(r.stdout).target, "cell", `--op ${op} must report a cell target`);
+    const back = await loadDocument(dst);
+    assert.equal(back.getParagraphLength(0, 1), bodyBefore, `--op ${op} must not touch the body`);
   }
 });
 
@@ -366,4 +374,103 @@ test("indent --by-marker: refuses when there is nothing to learn from", async ()
   assert.match(r.stderr, /found no already-formatted paragraph to learn from/);
   assert.match(r.stderr, /Format one by hand first/, "and it says how to proceed");
   assert.equal(existsSync(at("bm-none.hwp")), false);
+});
+
+// ── --op bullet in a cell: the glyph, and deliberately nothing else ────────
+//
+// The body path sets glyph AND depth together because there they travel as one
+// convention. In a cell they do not: depth lives in the paragraph shape, and
+// changing that through applyParaFormatInCell MINTS a shape which rhwp reports
+// as identical to its donor and Hancom renders differently (spec rule 71). So
+// this path edits the marker as TEXT — measured to leave paraShapeId untouched
+// — and refuses --level rather than reintroducing that bug.
+
+test("cell bullet: replaces the glyph WITHOUT touching the paragraph shape", async () => {
+  const src = await cellWithLines();
+  const split = at("cb-split.hwp");
+  assert.equal(
+    run([src, "--op", "split-lines", "--section", "0", "--paragraph", "0", "--control", String(LINES_CTRL),
+      "--cell", "0", "--output", split]).status,
+    0,
+  );
+  const doc = await loadDocument(split);
+  const addr = resolveCellAddress(doc, { section: 0, paragraph: 0, control: LINES_CTRL, cell: 0 });
+  const shapeBefore = new Map();
+  for (const x of cellParagraphs(doc, addr)) {
+    shapeBefore.set(x.cellPara, JSON.parse(doc.getCellParaPropertiesAt(0, 0, LINES_CTRL, 0, x.cellPara)).paraShapeId);
+  }
+
+  const dst = at("cb.hwp");
+  const r = run([split, "--op", "bullet", "--section", "0", "--paragraph", "0", "--control", String(LINES_CTRL),
+    "--cell", "0", "--char", "□", "--output", dst]);
+  assert.equal(r.status, 0, r.stderr);
+  const j = JSON.parse(r.stdout);
+  assert.equal(j.target, "cell");
+  assert.equal(j.mode, "text");
+
+  const { parseMarker } = await import("../../src/lib/bullets.mjs");
+  const back = await loadDocument(dst);
+  for (const x of cellParagraphs(back, addr)) {
+    const m = parseMarker(x.text);
+    if (m) assert.equal(m.glyph, "□", `cp${x.cellPara} should now carry □`);
+    // The promise this path makes: geometry is untouched.
+    assert.equal(
+      JSON.parse(back.getCellParaPropertiesAt(0, 0, LINES_CTRL, 0, x.cellPara)).paraShapeId,
+      shapeBefore.get(x.cellPara),
+      `cp${x.cellPara} must keep its paragraph shape — a glyph edit is text, not geometry`,
+    );
+  }
+});
+
+test("cell bullet: without --paragraphs it touches only ALREADY-marked paragraphs", async () => {
+  // "Change the bullets in this cell" means the bullets. Defaulting to every
+  // paragraph would put a glyph in front of headers and prose.
+  const src = await cellWithLines();
+  const split = at("cb2-split.hwp");
+  run([src, "--op", "split-lines", "--section", "0", "--paragraph", "0", "--control", String(LINES_CTRL),
+    "--cell", "0", "--output", split]);
+  const doc = await loadDocument(split);
+  const addr = resolveCellAddress(doc, { section: 0, paragraph: 0, control: LINES_CTRL, cell: 0 });
+  const { parseMarker } = await import("../../src/lib/bullets.mjs");
+  const unmarked = cellParagraphs(doc, addr).filter((x) => x.length > 0 && !parseMarker(x.text));
+
+  const dst = at("cb2.hwp");
+  assert.equal(
+    run([split, "--op", "bullet", "--section", "0", "--paragraph", "0", "--control", String(LINES_CTRL),
+      "--cell", "0", "--char", "□", "--output", dst]).status,
+    0,
+  );
+  const back = await loadDocument(dst);
+  const after = cellParagraphs(back, addr);
+  for (const x of unmarked) {
+    assert.equal(after[x.cellPara].text, x.text, `cp${x.cellPara} had no marker and must be untouched`);
+  }
+});
+
+test("cell bullet: --level is refused, and says where depth belongs", () => {
+  const r = run([FIX, "--op", "bullet", ...TABLE, "--cell", "0",
+    "--char", "○", "--level", "2", "--output", at("cb-level.hwp")]);
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /does not take --level/);
+  assert.match(r.stderr, /--op indent --by-marker/, "it names the op that does depth safely");
+  assert.match(r.stderr, /mint a new shape/, "and why, so the refusal is not arbitrary");
+  assert.equal(existsSync(at("cb-level.hwp")), false);
+});
+
+test("cell bullet: hwp mode is refused for the same reason", () => {
+  const r = run([FIX, "--op", "bullet", ...TABLE, "--cell", "0",
+    "--char", "○", "--mode", "hwp", "--output", at("cb-hwp.hwp")]);
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /supports --mode text only/);
+  assert.match(r.stderr, /mint\s+a shape/);
+});
+
+test("cell bullet: a cell with no markers says so instead of doing nothing quietly", () => {
+  // fixture-table's first cell is a single unmarked line.
+  const r = run([FIX, "--op", "bullet", ...TABLE, "--cell", "0",
+    "--char", "○", "--output", at("cb-none.hwp")]);
+  assert.equal(r.status, 3);
+  assert.match(r.stderr, /no paragraph in this cell carries a marker/);
+  assert.match(r.stderr, /--paragraphs/, "and says how to add one deliberately");
+  assert.equal(existsSync(at("cb-none.hwp")), false);
 });

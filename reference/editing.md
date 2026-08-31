@@ -53,7 +53,11 @@ Address the table by `--table N` (the index `extract_tables` prints) or by `--se
 
 `--op char` does not need `--start`/`--end` here; the range defaults to the whole cell paragraph, since you already named the paragraph. Character formatting on an **empty** cell paragraph is refused rather than silently ignored — form cells are full of empty spacers, and the engine returns success for that.
 
-**Which ops take a cell address:** `--op list`, `--op char`, `--op para`, `--op split-lines` and `--op indent` do. **`--op bullet` does not** — given one it says so rather than quietly editing a body paragraph instead. For a bulleted list inside a cell, use `--op para` with the properties directly.
+**Which ops take a cell address:** `--op list`, `--op char`, `--op para`, `--op bullet`, `--op indent` and `--op split-lines` — all of them.
+
+**`--op bullet` in a cell changes the GLYPH and nothing else.** In the body it sets glyph and depth together, because there the two travel as one convention (leading spaces plus a hanging indent). In a cell they do not: depth lives in the paragraph shape, and changing that mints a new shape which Hancom renders differently from its donor (spec rule 71). So the cell path edits the marker as *text* — measured to leave `paraShapeId` untouched — and **refuses `--level` and `--mode hwp`**, naming `--op indent --by-marker` as the op that does depth safely. Set the glyph here, match the depth there; the two compose.
+
+Without `--paragraphs` it touches only paragraphs that **already carry a marker** — "change the bullets in this cell" means the bullets, and defaulting to every paragraph would put a glyph in front of headers and prose. Naming paragraphs explicitly is how you *add* a marker where there was none. A cell with no markers and no `--paragraphs` is an error (exit 3) rather than a silent no-op. A paragraph that also carries HWP's own `headType` bullet gets a warning: only the typed glyph changed, because clearing `headType` is a paragraph property and would mint a shape.
 
 #### `--op split-lines` — when a cell paragraph is really many lines
 
